@@ -130,12 +130,21 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null &&
 echo
 bold "Releasing $tag"
 dim "  from:   $(git rev-parse --short HEAD) on $BRANCH"
-commits="$(git log --oneline "${latest}..HEAD" 2>/dev/null | wc -l | tr -d ' ')"
-if [ "$latest" != "v0.0.0" ] && [ "$commits" != "0" ]; then
-  dim "  since $latest: $commits commits"
-  echo
-  git log --pretty='  %C(dim)%h%Creset %s' "${latest}..HEAD" | head -20
-  [ "$commits" -gt 20 ] && dim "  ... and $((commits - 20)) more"
+
+# Only diff against the previous tag when there actually is one. Under
+# `set -o pipefail` a `git log v0.0.0..HEAD` against a tag that was never
+# created fails the whole pipeline and, with `set -e`, exits the script
+# silently — right before it would have tagged anything.
+if git rev-parse -q --verify "refs/tags/${latest}" >/dev/null; then
+  commits="$(git rev-list --count "${latest}..HEAD")"
+  if [ "$commits" != "0" ]; then
+    dim "  since $latest: $commits commits"
+    echo
+    git log --pretty='  %C(dim)%h%Creset %s' "${latest}..HEAD" | head -20
+    [ "$commits" -gt 20 ] && dim "  ... and $((commits - 20)) more"
+  fi
+else
+  dim "  first release"
 fi
 echo
 
