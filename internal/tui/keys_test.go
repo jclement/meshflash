@@ -47,7 +47,7 @@ func TestConfigureTogglesOnSpace(t *testing.T) {
 		{ID: "rak4631", Name: "RAK WisBlock 4631", Platform: "nrf52840"},
 	}
 	m := &configureModel{rows: rows, selected: map[string]bool{}, width: 90, height: 24}
-	m.applyFilter()
+	m.applyView()
 
 	press := func(k tea.KeyPressMsg) {
 		next, _ := m.Update(k)

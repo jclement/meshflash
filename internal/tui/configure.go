@@ -22,10 +22,41 @@ type DeviceRow struct {
 	// Bytes is the estimated download this board pulls in, which is what
 	// makes the size consequence of a selection visible before committing.
 	Bytes int64
-	// Attached marks boards currently plugged in, so the common case of
-	// "select what I'm holding" is one keystroke.
+	// Attached marks boards that could plausibly be the hardware currently
+	// plugged in. USB identification is weak, so this is a candidate set
+	// rather than a definite match.
 	Attached bool
 }
+
+// searchText is the haystack the filter matches against, precomputed because
+// it is rebuilt on every keystroke across a couple of hundred rows.
+func (r DeviceRow) searchText() string {
+	return strings.ToLower(strings.Join([]string{
+		r.Name, r.ID, r.Vendor, r.Platform, strings.Join(r.Projects, " "),
+	}, " "))
+}
+
+// viewMode narrows which boards the list shows.
+type viewMode int
+
+const (
+	viewAll viewMode = iota
+	viewAttached
+	viewSelected
+)
+
+func (v viewMode) label() string {
+	switch v {
+	case viewAttached:
+		return "attached"
+	case viewSelected:
+		return "selected"
+	default:
+		return "all"
+	}
+}
+
+func (v viewMode) next() viewMode { return (v + 1) % 3 }
 
 // Configure presents the device multi-select and returns the chosen IDs.
 func Configure(rows []DeviceRow, selected []string) ([]string, error) {
@@ -34,19 +65,28 @@ func Configure(rows []DeviceRow, selected []string) ([]string, error) {
 	}
 
 	sel := map[string]bool{}
+	initial := map[string]bool{}
 	for _, id := range selected {
 		sel[id] = true
+		initial[id] = true
 	}
 
 	SortDeviceRows(rows)
 
 	filter := textinput.New()
-	filter.Placeholder = "type to filter"
-	filter.Prompt = "  / "
+	filter.Placeholder = "name, vendor or chip"
+	filter.Prompt = "  search: "
 	filter.CharLimit = 40
 
-	m := &configureModel{rows: rows, selected: sel, filter: filter, width: 90, height: 24}
-	m.applyFilter()
+	m := &configureModel{
+		rows:     rows,
+		selected: sel,
+		initial:  initial,
+		filter:   filter,
+		width:    90,
+		height:   24,
+	}
+	m.applyView()
 
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
@@ -69,11 +109,17 @@ func Configure(rows []DeviceRow, selected []string) ([]string, error) {
 
 type configureModel struct {
 	rows     []DeviceRow
-	visible  []int // indexes into rows, after filtering
+	visible  []int // indexes into rows, after the view mode and filter
 	selected map[string]bool
+	// initial is the selection on entry, used to detect unsaved changes.
+	initial map[string]bool
 
-	filter    textinput.Model
+	mode   viewMode
+	filter textinput.Model
+	// filtering is true while the search box has focus.
 	filtering bool
+	// confirming is true while the save/discard prompt is up.
+	confirming bool
 
 	cursor    int
 	offset    int
@@ -84,100 +130,218 @@ type configureModel struct {
 
 func (m *configureModel) Init() tea.Cmd { return textinput.Blink }
 
-func (m *configureModel) applyFilter() {
-	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+// resetView recomputes the visible rows and returns to the top.
+//
+// Used when the scope changes — a new search or view mode — because landing
+// mid-way down a fresh result set is disorienting.
+func (m *configureModel) resetView() {
+	m.cursor = 0
+	m.offset = 0
+	m.applyView()
+}
+
+// applyView recomputes the visible rows for the current mode and filter,
+// keeping the cursor where it is.
+//
+// Correcting the scroll here is essential, not cosmetic: narrowing a long list
+// while scrolled down otherwise leaves offset past the end of the new result
+// set, and the render loop draws nothing at all — so a board that plainly
+// matches the search appears to be missing.
+func (m *configureModel) applyView() {
+	terms := strings.Fields(strings.ToLower(m.filter.Value()))
+
 	m.visible = m.visible[:0]
 	for i, r := range m.rows {
-		if q == "" || strings.Contains(strings.ToLower(r.Name+" "+r.ID+" "+r.Vendor+" "+r.Platform), q) {
+		switch m.mode {
+		case viewAttached:
+			if !r.Attached {
+				continue
+			}
+		case viewSelected:
+			if !m.selected[r.ID] {
+				continue
+			}
+		}
+		if matchesAll(r.searchText(), terms) {
 			m.visible = append(m.visible, i)
 		}
 	}
+
 	if m.cursor >= len(m.visible) {
 		m.cursor = max(len(m.visible)-1, 0)
 	}
+	if m.offset > m.cursor {
+		m.offset = m.cursor
+	}
+	m.scrollToCursor()
+}
+
+// matchesAll requires every term to appear, in any order, so "heltec v4" and
+// "v4 heltec" both find the same board.
+func matchesAll(haystack string, terms []string) bool {
+	for _, t := range terms {
+		if !strings.Contains(haystack, t) {
+			return false
+		}
+	}
+	return true
 }
 
 // listHeight is how many rows fit, leaving room for the header and footer.
-func (m *configureModel) listHeight() int { return max(m.height-9, 3) }
+func (m *configureModel) listHeight() int { return max(m.height-10, 3) }
+
+// dirty reports whether the selection differs from the one we started with.
+func (m *configureModel) dirty() bool {
+	count := 0
+	for id, on := range m.selected {
+		if !on {
+			continue
+		}
+		count++
+		if !m.initial[id] {
+			return true
+		}
+	}
+	return count != len(m.initial)
+}
 
 func (m *configureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.scrollToCursor()
 		return m, nil
 
 	case tea.KeyPressMsg:
-		if m.filtering {
-			switch msg.String() {
-			case "esc":
-				m.filtering = false
-				m.filter.SetValue("")
-				m.filter.Blur()
-				m.applyFilter()
-				return m, nil
-			case "enter":
-				m.filtering = false
-				m.filter.Blur()
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.filter, cmd = m.filter.Update(msg)
-			m.applyFilter()
-			return m, cmd
+		switch {
+		case m.confirming:
+			return m.updateConfirm(msg)
+		case m.filtering:
+			return m.updateFilter(msg)
+		default:
+			return m.updateList(msg)
+		}
+	}
+	return m, nil
+}
+
+// updateConfirm handles the save/discard prompt shown when leaving with
+// unsaved changes.
+func (m *configureModel) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		return m, tea.Quit // cancelled stays false: save
+	case "n", "N":
+		m.cancelled = true
+		return m, tea.Quit
+	case "esc", "c", "ctrl+c":
+		// Back to editing rather than picking for them.
+		m.confirming = false
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *configureModel) updateFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.filtering = false
+		m.filter.SetValue("")
+		m.filter.Blur()
+		m.resetView()
+		return m, nil
+	case "enter", "down", "up":
+		// Leave the box but keep the query, so the results stay narrowed
+		// while you arrow through them.
+		m.filtering = false
+		m.filter.Blur()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.filter, cmd = m.filter.Update(msg)
+	m.resetView()
+	return m, cmd
+}
+
+func (m *configureModel) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		m.cancelled = true
+		return m, tea.Quit
+
+	case "esc", "q":
+		// Escape must not silently discard work. With changes pending it asks;
+		// with none it just leaves.
+		if m.dirty() {
+			m.confirming = true
+			return m, nil
+		}
+		m.cancelled = true
+		return m, tea.Quit
+
+	case "enter":
+		// Enter is the unambiguous "save and go" — no prompt.
+		return m, tea.Quit
+
+	case "/":
+		m.filtering = true
+		m.filter.Focus()
+		return m, textinput.Blink
+
+	case "t":
+		m.mode = m.mode.next()
+		m.resetView()
+
+	case "d":
+		// Jump straight to what is plugged in. Combined with `a` this is how a
+		// kit gets configured: d to narrow, a to take them all.
+		m.mode = viewAttached
+		m.resetView()
+
+	case "s":
+		m.mode = viewSelected
+		m.resetView()
+
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.visible)-1 {
+			m.cursor++
+		}
+	case "pgup":
+		m.cursor = max(m.cursor-m.listHeight(), 0)
+	case "pgdown":
+		m.cursor = min(m.cursor+m.listHeight(), max(len(m.visible)-1, 0))
+	case "home", "g":
+		m.cursor = 0
+	case "end", "G":
+		m.cursor = max(len(m.visible)-1, 0)
+
+	case "space", " ", "x":
+		m.toggleCursor()
+		// Deselecting inside the selected-only view would leave the row
+		// stranded, so rebuild the list.
+		if m.mode == viewSelected {
+			m.applyView()
 		}
 
-		switch msg.String() {
-		case "ctrl+c", "esc":
-			m.cancelled = true
-			return m, tea.Quit
-		case "q":
-			m.cancelled = true
-			return m, tea.Quit
-		case "/":
-			m.filtering = true
-			m.filter.Focus()
-			return m, textinput.Blink
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j":
-			if m.cursor < len(m.visible)-1 {
-				m.cursor++
-			}
-		case "pgup":
-			m.cursor = max(m.cursor-m.listHeight(), 0)
-		case "pgdown":
-			m.cursor = min(m.cursor+m.listHeight(), max(len(m.visible)-1, 0))
-		case "home", "g":
-			m.cursor = 0
-		case "end", "G":
-			m.cursor = max(len(m.visible)-1, 0)
-		// Bubble Tea v2 stringifies the space key as "space"; v1 used " ".
-		case "space", " ", "x":
-			m.toggleCursor()
-		case "a":
-			// Select everything currently visible, which combined with the
-			// filter is how "all nRF52 boards" gets selected quickly.
-			for _, i := range m.visible {
-				m.selected[m.rows[i].ID] = true
-			}
-		case "n":
-			for _, i := range m.visible {
-				delete(m.selected, m.rows[i].ID)
-			}
-		case "d":
-			// Select exactly what is plugged in right now.
-			for _, r := range m.rows {
-				if r.Attached {
-					m.selected[r.ID] = true
-				}
-			}
-		case "enter":
-			return m, tea.Quit
+	case "a":
+		for _, i := range m.visible {
+			m.selected[m.rows[i].ID] = true
 		}
-		m.scrollToCursor()
+	case "n":
+		for _, i := range m.visible {
+			delete(m.selected, m.rows[i].ID)
+		}
+		if m.mode == viewSelected {
+			m.applyView()
+		}
 	}
+
+	m.scrollToCursor()
 	return m, nil
 }
 
@@ -206,6 +370,16 @@ func (m *configureModel) scrollToCursor() {
 	}
 }
 
+func (m *configureModel) selectedCount() int {
+	n := 0
+	for _, on := range m.selected {
+		if on {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *configureModel) selectedBytes() int64 {
 	var total int64
 	for _, r := range m.rows {
@@ -216,35 +390,36 @@ func (m *configureModel) selectedBytes() int64 {
 	return total
 }
 
-func (m *configureModel) View() tea.View {
-	var b strings.Builder
-
-	count := 0
-	for _, on := range m.selected {
-		if on {
-			count++
+func (m *configureModel) attachedCount() int {
+	n := 0
+	for _, r := range m.rows {
+		if r.Attached {
+			n++
 		}
 	}
+	return n
+}
+
+func (m *configureModel) View() tea.View {
+	var b strings.Builder
 
 	b.WriteString(Title().Render(" meshflash configure "))
 	b.WriteString("  ")
 	b.WriteString(Subtitle().Render("choose the boards you carry — only these get cached for offline flashing"))
 	b.WriteString("\n\n")
 
-	fmt.Fprintf(&b, "  %s selected · about %s per release\n",
-		Selected().Render(fmt.Sprintf("%d boards", count)),
+	fmt.Fprintf(&b, "  %s selected · about %s per release",
+		Selected().Render(fmt.Sprintf("%d boards", m.selectedCount())),
 		Selected().Render(store.FormatBytes(m.selectedBytes())))
-
-	// With a couple of hundred boards the list is far longer than the screen,
-	// so say how many there are and how to narrow them. Without this a board
-	// that is simply below the fold reads as missing.
-	if m.filter.Value() != "" {
-		fmt.Fprintf(&b, "  %s\n", Muted().Render(fmt.Sprintf(
-			"showing %d of %d boards matching %q", len(m.visible), len(m.rows), m.filter.Value())))
-	} else {
-		fmt.Fprintf(&b, "  %s\n", Muted().Render(fmt.Sprintf(
-			"%d boards · press / to search by name, vendor or chip", len(m.rows))))
+	if m.dirty() {
+		b.WriteString(Warn().Render("  · unsaved"))
 	}
+	b.WriteString("\n")
+
+	// With a couple of hundred boards the list runs well past the screen, so
+	// state plainly what is being shown. A board below the fold otherwise
+	// reads as missing.
+	b.WriteString("  " + Muted().Render(m.scopeLine()) + "\n")
 
 	if m.filtering || m.filter.Value() != "" {
 		b.WriteString(m.filter.View() + "\n")
@@ -255,7 +430,7 @@ func (m *configureModel) View() tea.View {
 	end := min(m.offset+h, len(m.visible))
 
 	if len(m.visible) == 0 {
-		b.WriteString(Muted().Render("  no boards match the filter\n"))
+		b.WriteString("  " + Muted().Render(m.emptyMessage()) + "\n")
 	}
 
 	for i := m.offset; i < end; i++ {
@@ -267,12 +442,13 @@ func (m *configureModel) View() tea.View {
 		}
 
 		name := Truncate(r.Name, 34)
-		meta := fmt.Sprintf("%-10s %-18s %8s", r.Platform, strings.Join(r.Projects, "+"), store.FormatBytes(r.Bytes))
+		meta := fmt.Sprintf("%-10s %-18s %8s",
+			r.Platform, strings.Join(r.Projects, "+"), store.FormatBytes(r.Bytes))
+		row := fmt.Sprintf("%s %-34s %s", check, name, Muted().Render(meta))
 		if r.Attached {
-			meta += "  " + OK().Render("attached")
+			row += "  " + OK().Render("attached")
 		}
 
-		row := fmt.Sprintf("%s %-34s %s", check, name, Muted().Render(meta))
 		if i == m.cursor {
 			b.WriteString(Selected().Render(GlyphArrow+" ") + row + "\n")
 		} else {
@@ -281,19 +457,65 @@ func (m *configureModel) View() tea.View {
 	}
 
 	if len(m.visible) > h {
-		fmt.Fprintf(&b, "\n  %s\n", Muted().Render(fmt.Sprintf("showing %d–%d of %d", m.offset+1, end, len(m.visible))))
+		fmt.Fprintf(&b, "\n  %s\n", Muted().Render(
+			fmt.Sprintf("showing %d–%d of %d", m.offset+1, end, len(m.visible))))
 	}
 
-	if m.filtering {
-		b.WriteString(Help().Render("type to filter · enter accept · esc clear"))
-	} else {
-		b.WriteString(Help().Render("space toggle · a all shown · n none shown · d attached · / filter · enter save · esc cancel"))
-	}
+	b.WriteString("\n")
+	b.WriteString(m.footer())
+
 	v := tea.NewView(b.String())
-	// The device picker is a long, scrollable list, so it takes over the screen
-	// and restores the scrollback on exit.
+	// A long scrollable list takes over the screen and restores the scrollback
+	// on exit.
 	v.AltScreen = true
 	return v
+}
+
+// scopeLine describes what the list is currently showing.
+func (m *configureModel) scopeLine() string {
+	scope := fmt.Sprintf("%d boards", len(m.rows))
+	switch m.mode {
+	case viewAttached:
+		scope = fmt.Sprintf("attached only · %d of %d boards", len(m.visible), len(m.rows))
+	case viewSelected:
+		scope = fmt.Sprintf("selected only · %d of %d boards", len(m.visible), len(m.rows))
+	}
+	if q := m.filter.Value(); q != "" {
+		return fmt.Sprintf("%s · matching %q · %d shown", scope, q, len(m.visible))
+	}
+	if m.mode == viewAll {
+		return scope + " · press / to search by name, vendor or chip"
+	}
+	return scope
+}
+
+func (m *configureModel) emptyMessage() string {
+	switch {
+	case m.filter.Value() != "":
+		return fmt.Sprintf("no boards match %q — press esc to clear the search", m.filter.Value())
+	case m.mode == viewAttached && m.attachedCount() == 0:
+		return "no boards are plugged in right now — press t to show all boards"
+	case m.mode == viewSelected:
+		return "nothing selected yet — press t to show all boards"
+	default:
+		return "no boards to show"
+	}
+}
+
+func (m *configureModel) footer() string {
+	if m.confirming {
+		return Danger().Render(
+			Warn().Render("Save your changes?") + "\n" +
+				fmt.Sprintf("%d boards selected, about %s per release.\n\n",
+					m.selectedCount(), store.FormatBytes(m.selectedBytes())) +
+				"y save and exit · n discard and exit · esc keep editing")
+	}
+	if m.filtering {
+		return Help().Render("type to search · enter/↓ accept · esc clear")
+	}
+	return Help().Render(
+		"space toggle · a all shown · n none shown · / search\n" +
+			"t view (" + m.mode.label() + ") · d attached · s selected · enter save · esc exit")
 }
 
 // SortDeviceRows orders the configure list by name rather than platform.
@@ -328,8 +550,6 @@ func BuildDeviceRows(cat *catalog.Catalog, attached map[string]bool) []DeviceRow
 		if !ok {
 			continue
 		}
-		// Count each source archive once per device: a device whose artifacts
-		// all come from one platform zip should not be charged for it twice.
 		for _, bld := range rel.Builds {
 			a := byDevice[bld.DeviceID]
 			if a == nil {
