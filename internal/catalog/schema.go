@@ -89,6 +89,13 @@ type Device struct {
 	// INFO_UF2.TXT is missing or unreadable.
 	UF2Volume []string `json:"uf2_volume,omitempty"`
 
+	// USBProduct matches the USB product string the board reports while
+	// running its application. Unlike a VID/PID this is board-specific — a
+	// Heltec T114 reports "HT-n5262", the same string its bootloader puts in
+	// INFO_UF2.TXT — so it identifies the model without the board having to be
+	// in its bootloader at all.
+	USBProduct []string `json:"usb_product,omitempty"`
+
 	Notes string `json:"notes,omitempty"`
 }
 

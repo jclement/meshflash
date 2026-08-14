@@ -96,6 +96,26 @@ var uf2BoardHints = map[string][]string{
 	"picow":        {"rp2040-picow", "RPI-RP2"},
 }
 
+// usbProductHints maps a device id substring to the USB product string the
+// board reports while running its application.
+//
+// This is the best identification signal a running board offers: vendors put
+// the board name here, so unlike a VID/PID it names the model, and unlike
+// INFO_UF2.TXT it is readable without the board being in its bootloader. A
+// Heltec T114 reports "HT-n5262" in both places.
+// Keys here are matched exactly, not as substrings: "t114" would also match
+// heltec-t114-without-display, and two boards claiming the same product string
+// makes identification ambiguous rather than exact — which is worse than
+// having no hint at all.
+var usbProductHints = map[string][]string{
+	"heltec-mesh-node-t114": {"HT-n5262"},
+	"heltec-mesh-node-t1":   {"HT-n5261"},
+	"rak4631":               {"WisCore RAK4631 Board", "RAK4631"},
+	"t-echo":                {"LilyGo T-Echo"},
+	"seeed_xiao_nrf52840":   {"XIAO nRF52840"},
+	"tracker-t1000-e":       {"T1000-E"},
+}
+
 // uf2VolumeHints maps a device id substring to mass-storage volume labels.
 var uf2VolumeHints = map[string][]string{
 	"rak4631":     {"RAK4631", "WISCORE"},
@@ -144,6 +164,20 @@ func applyUF2Hints(d *catalog.Device) {
 			d.UF2Volume = mergeStrings(d.UF2Volume, vols)
 		}
 	}
+	applyProductHints(d)
+}
+
+// applyProductHints fills in the USB product strings a board reports.
+func applyProductHints(d *catalog.Device) {
+	id := strings.ToLower(d.ID)
+	if products, ok := usbProductHints[id]; ok {
+		d.USBProduct = mergeStrings(d.USBProduct, products)
+	}
+	// A UF2 Board-ID and the application's USB product string are frequently
+	// the same vendor string, so each doubles as the other.
+	if products, ok := usbProductHints[id]; ok {
+		d.UF2Board = mergeStrings(d.UF2Board, products)
+	}
 }
 
 // applyUSBHints annotates every device with any USB IDs meshflash knows.
@@ -159,6 +193,7 @@ func applyUSBHints(devices []catalog.Device) {
 			}
 		}
 		applyUF2Hints(&devices[i])
+		applyProductHints(&devices[i])
 	}
 }
 

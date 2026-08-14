@@ -259,6 +259,29 @@ func matchPort(p Port, cat *catalog.Catalog) []Candidate {
 		return nil
 	}
 
+	// The product string is the strongest signal a running board offers.
+	// Vendors put the board name there — a Heltec T114 reports "HT-n5262",
+	// which is exactly what its bootloader writes as INFO_UF2.TXT Board-ID —
+	// so unlike a VID/PID it names the model, and does so without needing the
+	// board to be in its bootloader.
+	if product := strings.TrimSpace(p.Product); product != "" {
+		var byProduct []Candidate
+		for _, d := range cat.Devices {
+			if containsFold(d.USBProduct, product) || containsFold(d.UF2Board, product) {
+				byProduct = append(byProduct, Candidate{
+					DeviceID:   d.ID,
+					Name:       d.Name,
+					Confidence: ConfidenceExact,
+					Reason:     "USB product string " + product,
+				})
+			}
+		}
+		if len(byProduct) > 0 {
+			sortCandidates(byProduct)
+			return byProduct
+		}
+	}
+
 	shared := IsSharedBridge(id)
 
 	var out []Candidate
