@@ -13,3 +13,7 @@
 *.swp
 .idea/
 .vscode/
+
+# Local build output
+/bin/
+/.meshflash-dev/
