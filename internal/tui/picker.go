@@ -78,7 +78,7 @@ func (m *pickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		case "end", "G":
 			m.cursor = len(m.choices) - 1
-		case "enter", " ":
+		case "enter", "space", " ":
 			m.done = true
 			return m, tea.Quit
 		}

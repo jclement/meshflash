@@ -38,12 +38,7 @@ func Configure(rows []DeviceRow, selected []string) ([]string, error) {
 		sel[id] = true
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Platform != rows[j].Platform {
-			return rows[i].Platform < rows[j].Platform
-		}
-		return rows[i].Name < rows[j].Name
-	})
+	SortDeviceRows(rows)
 
 	filter := textinput.New()
 	filter.Placeholder = "type to filter"
@@ -158,7 +153,8 @@ func (m *configureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		case "end", "G":
 			m.cursor = max(len(m.visible)-1, 0)
-		case " ", "x":
+		// Bubble Tea v2 stringifies the space key as "space"; v1 used " ".
+		case "space", " ", "x":
 			m.toggleCursor()
 		case "a":
 			// Select everything currently visible, which combined with the
@@ -239,6 +235,17 @@ func (m *configureModel) View() tea.View {
 		Selected().Render(fmt.Sprintf("%d boards", count)),
 		Selected().Render(store.FormatBytes(m.selectedBytes())))
 
+	// With a couple of hundred boards the list is far longer than the screen,
+	// so say how many there are and how to narrow them. Without this a board
+	// that is simply below the fold reads as missing.
+	if m.filter.Value() != "" {
+		fmt.Fprintf(&b, "  %s\n", Muted().Render(fmt.Sprintf(
+			"showing %d of %d boards matching %q", len(m.visible), len(m.rows), m.filter.Value())))
+	} else {
+		fmt.Fprintf(&b, "  %s\n", Muted().Render(fmt.Sprintf(
+			"%d boards · press / to search by name, vendor or chip", len(m.rows))))
+	}
+
 	if m.filtering || m.filter.Value() != "" {
 		b.WriteString(m.filter.View() + "\n")
 	}
@@ -287,6 +294,23 @@ func (m *configureModel) View() tea.View {
 	// and restores the scrollback on exit.
 	v.AltScreen = true
 	return v
+}
+
+// SortDeviceRows orders the configure list by name rather than platform.
+//
+// Platform-first grouping scatters a vendor's boards across the list — Heltec
+// alone spans esp32, esp32c3, esp32s3 and nrf52840 — and since the rows carry
+// no group headers the ordering looks arbitrary, so a board you know exists
+// reads as missing. Sorting by name keeps "Heltec V2/V3/V4" adjacent, which is
+// how people actually look for hardware. The platform is still on every row.
+func SortDeviceRows(rows []DeviceRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		li, lj := strings.ToLower(rows[i].Name), strings.ToLower(rows[j].Name)
+		if li != lj {
+			return li < lj
+		}
+		return rows[i].ID < rows[j].ID
+	})
 }
 
 // BuildDeviceRows turns a catalog into configure rows, estimating the download
