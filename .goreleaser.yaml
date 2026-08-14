@@ -118,8 +118,9 @@ homebrew_casks:
     homepage: https://github.com/jclement/meshflash
     description: Flash Meshtastic and MeshCore firmware onto LoRa boards, offline-capable
     license: MIT
-    # Only tagged releases belong in a tap.
-    skip_upload: auto
+    # Skip cleanly when no tap token is configured, rather than failing the
+    # whole release. "auto" additionally skips prereleases and snapshots.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_TOKEN "" }}true{{ else }}auto{{ end }}' 
     commit_author:
       name: goreleaser
       email: noreply@github.com
