@@ -1,0 +1,109 @@
+name: catalog
+
+# Rebuilds catalog.json from upstream Meshtastic and MeshCore releases and
+# publishes it as a release asset that clients fetch with `meshflash update`.
+#
+# This is the containment boundary for upstream churn. When an upstream renames
+# an asset or changes its archive layout, this job fails here — visibly, in CI,
+# where it can be fixed once — instead of on an offline machine in a field.
+
+on:
+  schedule:
+    # Twice daily. Meshtastic publishes frequently and MeshCore in bursts.
+    - cron: "17 5,17 * * *"
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: "How many releases to keep per project"
+        default: "3"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - "tools/catalog-gen/**"
+      - "internal/catalog/**"
+      - ".github/workflows/catalog.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The generator downloads every firmware archive to read the per-device
+      # manifests inside. Caching them keeps a routine run to a few minutes.
+      - name: Restore archive cache
+        uses: actions/cache@v6
+        with:
+          path: .catalog-cache
+          key: catalog-archives-${{ github.run_id }}
+          restore-keys: catalog-archives-
+
+      - name: Generate catalog
+        env:
+          # Raises the API rate limit; without it a full run stops partway.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run ./tools/catalog-gen \
+            -out catalog.json \
+            -cache .catalog-cache \
+            -releases "${{ github.event.inputs.releases || '3' }}"
+
+      - name: Summarise
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          c = json.load(open("catalog.json"))
+          print(f"### Catalog\n")
+          print(f"- generated: `{c['generated_at']}`")
+          print(f"- devices: **{len(c['devices'])}**\n")
+          print("| project | releases | builds |")
+          print("|---|---|---|")
+          for p in c["projects"]:
+              builds = sum(len(r["builds"]) for r in p["releases"])
+              print(f"| {p['id']} | {len(p['releases'])} | {builds} |")
+          PY
+
+      # A catalog that lost most of its devices means an upstream layout change
+      # broke a parser. Publishing it would strand every client, so stop.
+      - name: Sanity check
+        run: |
+          devices=$(python3 -c "import json;print(len(json.load(open('catalog.json'))['devices']))")
+          echo "device count: $devices"
+          if [ "$devices" -lt 50 ]; then
+            echo "::error::Only $devices devices in the catalog — refusing to publish. An upstream asset layout probably changed."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: catalog
+          path: catalog.json
+
+      # Published to a moving `catalog` tag so clients can fetch a stable URL
+      # while still being able to pin an older release if a bad catalog ships.
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+          gh release create "catalog-$stamp" catalog.json \
+            --title "Firmware catalog $stamp" \
+            --notes "Automatically generated firmware catalog." \
+            || gh release upload "catalog-$stamp" catalog.json --clobber
+          # `latest` is what config.DefaultCatalogURL points at.
+          gh release upload latest catalog.json --clobber || true

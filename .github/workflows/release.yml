@@ -1,0 +1,45 @@
+name: release
+
+# Triggered by pushing a v* tag, which is what `mise run release` does.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    # Everything is released from macOS: darwin needs cgo for IOKit, while
+    # linux and windows are pure Go and cross-compile from here. See the
+    # comment at the top of .goreleaser.yaml.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser needs full history to build the changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Releases are cut from main; refuse to build a tag that is not on it,
+      # so a tag pushed from a stale branch cannot ship.
+      - name: Verify the tag is on main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} is not an ancestor of main; refusing to release."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} is on main"
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

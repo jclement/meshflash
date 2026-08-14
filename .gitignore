@@ -1,0 +1,15 @@
+# Build output
+/dist/
+/meshflash
+/meshflash.exe
+
+# catalog-gen downloads every upstream firmware archive to read the manifests
+# inside them; that is hundreds of megabytes and must never be committed.
+/.catalog-cache/
+/catalog.json
+
+# Editors and OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

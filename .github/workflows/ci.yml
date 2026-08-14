@@ -1,0 +1,110 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  # Catches build-tag breakage in the platform-specific volume enumerators,
+  # which the ubuntu test job alone would never compile.
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile every portable target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -e
+          for target in linux/amd64 linux/arm64 linux/arm windows/amd64 windows/arm64; do
+            printf '%-16s ' "$target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build -o /dev/null ./cmd/meshflash
+            echo ok
+          done
+
+  # darwin binds IOKit for serial port enumeration and so cannot be built
+  # without cgo, or cross-compiled from Linux. It gets its own runner.
+  build-darwin:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build darwin (arm64 and amd64)
+        run: |
+          set -e
+          CGO_ENABLED=1 GOARCH=arm64 CC="clang -arch arm64" \
+            go build -o /dev/null ./cmd/meshflash && echo "darwin/arm64 ok"
+          CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" \
+            go build -o /dev/null ./cmd/meshflash && echo "darwin/amd64 ok"
+
+  # A dry run of the real release, so a broken .goreleaser.yaml is caught on
+  # the pull request rather than at tag time when it is too late to amend.
+  goreleaser-check:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+      - name: Confirm archive names match the self-updater
+        run: |
+          # internal/selfupdate.AssetName builds these exact names; a mismatch
+          # would silently break `meshflash upgrade`.
+          ls -1 dist/*.tar.gz dist/*.zip
+          test -f dist/checksums.txt

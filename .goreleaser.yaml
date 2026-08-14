@@ -1,0 +1,120 @@
+version: 2
+
+project_name: meshflash
+
+# Everything is released from a single macOS runner. That looks unusual, but
+# it is the only arrangement that produces all six targets in one pass:
+# go.bug.st/serial's port enumerator binds IOKit on darwin, so darwin needs
+# cgo and therefore a macOS toolchain, while linux and windows are pure Go and
+# cross-compile from anywhere. macOS can do both; linux cannot do darwin.
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  # darwin needs cgo. macos-latest is arm64, and the Xcode SDK is universal,
+  # so amd64 cross-compiles by pointing CC at the right architecture.
+  - id: darwin
+    binary: meshflash
+    main: ./cmd/meshflash
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=1
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CGO_ENABLED=1
+          - CC=clang -arch x86_64
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CGO_ENABLED=1
+          - CC=clang -arch arm64
+    flags:
+      - -trimpath
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/jclement/meshflash/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/jclement/meshflash/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/jclement/meshflash/internal/buildinfo.Date={{ .CommitDate }}
+
+  # linux/windows enumerate serial ports through pure-Go syscalls.
+  - id: portable
+    binary: meshflash
+    main: ./cmd/meshflash
+    goos: [linux, windows]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    env:
+      - CGO_ENABLED=0
+    ignore:
+      # 32-bit ARM Windows is not a thing anyone runs this on.
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags: *ldflags
+
+archives:
+  - id: default
+    ids: [darwin, portable]
+    # This template must stay in lockstep with internal/selfupdate.AssetName,
+    # or `meshflash upgrade` will not find its own release. Note the absence of
+    # an ARM version suffix: only GOARM=7 is built, and AssetName uses a bare
+    # runtime.GOARCH ("arm").
+    name_template: "meshflash_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  # selfupdate fetches this exact filename and refuses to install without a
+  # matching entry, so it must not carry the default version-stamped name.
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 99
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    Download the archive for your platform, or upgrade in place:
+
+    ```
+    meshflash upgrade
+    ```
+
+    After upgrading, run `meshflash update` to refresh the firmware catalog.

@@ -1,0 +1,72 @@
+[tools]
+go = "1.26"
+goreleaser = "latest"
+
+[env]
+# Keep dev runs out of the real ~/.meshflash so experimenting cannot disturb a
+# prepared field kit. Override by exporting MESHFLASH_HOME yourself.
+MESHFLASH_DEV_HOME = "{{config_root}}/.meshflash-dev"
+
+[tasks.build]
+description = "Build the meshflash binary into ./bin"
+run = "go build -o bin/meshflash ./cmd/meshflash"
+sources = ["**/*.go", "go.mod", "go.sum"]
+outputs = ["bin/meshflash"]
+
+[tasks.test]
+description = "Run the test suite with the race detector"
+run = "go test -race ./..."
+
+[tasks.lint]
+description = "gofmt and go vet"
+run = [
+  """
+  unformatted="$(gofmt -l .)"
+  if [ -n "$unformatted" ]; then
+    echo "These files need gofmt:"; echo "$unformatted"; exit 1
+  fi
+  """,
+  "go vet ./...",
+]
+
+[tasks.check]
+description = "Everything CI runs: lint, test, and a cross-compile sweep"
+depends = ["lint", "test"]
+run = """
+set -e
+for target in linux/amd64 linux/arm64 linux/arm windows/amd64 windows/arm64; do
+  printf '%-16s ' "$target"
+  GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -o /dev/null ./cmd/meshflash
+  echo ok
+done
+# darwin binds IOKit for port enumeration, so it cannot be built without cgo.
+printf '%-16s ' "darwin (cgo)"
+CGO_ENABLED=1 go build -o /dev/null ./cmd/meshflash && echo ok
+"""
+
+[tasks.dev]
+description = "Build and run meshflash locally against an isolated dev home"
+depends = ["build"]
+# Runs the built binary rather than `go run` so what you exercise is exactly
+# what ships, and so Ctrl-C reaches meshflash instead of the go tool — which
+# matters when a flash is in progress and needs to stop at a safe point.
+run = "MESHFLASH_HOME=$MESHFLASH_DEV_HOME ./bin/meshflash {{arg(name='args', var=true, default='doctor')}}"
+
+[tasks.catalog]
+description = "Build catalog.json from upstream releases (downloads a lot)"
+run = "go run ./tools/catalog-gen -out catalog.json -cache .catalog-cache {{arg(name='args', var=true, default='')}}"
+
+[tasks.snapshot]
+description = "Build release archives locally without tagging or publishing"
+run = "goreleaser release --snapshot --clean"
+
+[tasks.release]
+description = "Tag and push a release (choose patch/minor/major)"
+# Deliberately not depending on `check`: the release workflow runs the tests
+# again on a clean checkout, and blocking a tag on a local cross-compile sweep
+# is friction without much safety. Pass a segment to skip the prompt.
+run = "./scripts/release.sh {{arg(name='segment', default='')}}"
+
+[tasks.clean]
+description = "Remove build output and caches"
+run = "rm -rf bin dist .catalog-cache .meshflash-dev catalog.json"
