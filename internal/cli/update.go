@@ -77,13 +77,7 @@ func (a *App) cmdUpdate(ctx context.Context, args []string) error {
 
 	// Report the transfer up front: the operator may be on a hotspot, and the
 	// per-platform archives are large even when only one board is selected.
-	var need []catalog.Artifact
-	for _, art := range wanted {
-		if !*force && a.Store.Cached(art) {
-			continue
-		}
-		need = append(need, art)
-	}
+	need := a.missingArtifacts(wanted, *force)
 	needBytes := store.DownloadBytes(need)
 
 	if len(need) == 0 {
@@ -99,8 +93,8 @@ func (a *App) cmdUpdate(ctx context.Context, args []string) error {
 		if err := a.fetchArtifacts(ctx, need); err != nil {
 			return err
 		}
-		fmt.Fprintf(a.Out, "%s firmware cached for %d boards\n",
-			tui.OK().Render(tui.GlyphOK), len(a.Cfg.Devices))
+		fmt.Fprintf(a.Out, "%s firmware cached for %s\n",
+			tui.OK().Render(tui.GlyphOK), plural(len(a.Cfg.Devices), "board"))
 	}
 
 	// --- prune -----------------------------------------------------------
@@ -143,6 +137,75 @@ func (a *App) prunableBytes(wanted []catalog.Artifact) int64 {
 		}
 	}
 	return n
+}
+
+// missingArtifacts returns the artifacts the current selection needs but does
+// not have cached.
+func (a *App) missingArtifacts(wanted []catalog.Artifact, force bool) []catalog.Artifact {
+	var need []catalog.Artifact
+	for _, art := range wanted {
+		if !force && a.Store.Cached(art) {
+			continue
+		}
+		need = append(need, art)
+	}
+	return need
+}
+
+// wantedArtifacts is everything the operator's current selection implies.
+func (a *App) wantedArtifacts(cat *catalog.Catalog) []catalog.Artifact {
+	return store.WantedArtifacts(cat,
+		a.Cfg.WantsDevice, a.Cfg.WantsProject, a.Cfg.WantsChannel, a.Cfg.KeepVersions)
+}
+
+// offerDownload asks whether to fetch newly-needed firmware and, if so, does.
+//
+// This is called straight after `configure` saves, because selecting a board
+// and then discovering at flash time that its firmware was never cached is the
+// exact failure the offline workflow exists to prevent — and the moment right
+// after choosing is when the operator still has a network.
+func (a *App) offerDownload(ctx context.Context, cat *catalog.Catalog) error {
+	if cat == nil || len(a.Cfg.Devices) == 0 {
+		return nil
+	}
+
+	need := a.missingArtifacts(a.wantedArtifacts(cat), false)
+	if len(need) == 0 {
+		fmt.Fprintf(a.Out, "\n%s firmware for every selected board is already cached.\n",
+			tui.OK().Render(tui.GlyphOK))
+		return nil
+	}
+
+	bytes := store.DownloadBytes(need)
+	fmt.Fprintf(a.Out, "\n%s %d firmware artifacts are not cached yet (about %s to download).\n",
+		tui.Warn().Render(tui.GlyphWarn), len(need), tui.Selected().Render(store.FormatBytes(bytes)))
+
+	if a.Offline {
+		fmt.Fprintln(a.Out, tui.Muted().Render("  --offline is set; run `meshflash update` when you have a network."))
+		return nil
+	}
+	if !a.confirm("Download them now?") {
+		fmt.Fprintln(a.Out, tui.Muted().Render("  Run `meshflash update` when you are ready."))
+		return nil
+	}
+
+	fmt.Fprintln(a.Out)
+	if err := a.fetchArtifacts(ctx, need); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Out, "%s firmware cached for %s\n",
+		tui.OK().Render(tui.GlyphOK), plural(len(a.Cfg.Devices), "board"))
+
+	u, err := a.Store.Usage()
+	if err == nil {
+		fmt.Fprintf(a.Out, "%s cache: %s firmware, %s source archives\n",
+			tui.Muted().Render(tui.GlyphInfo),
+			store.FormatBytes(u.Extracted), store.FormatBytes(u.Downloads))
+		if a.prunableBytes(a.wantedArtifacts(cat)) > 0 {
+			fmt.Fprintln(a.Out, tui.Muted().Render("  `meshflash update --prune` reclaims the source archives once firmware is extracted."))
+		}
+	}
+	return nil
 }
 
 // fetchArtifacts downloads and extracts, showing a single-line progress meter.

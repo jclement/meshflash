@@ -87,6 +87,65 @@ func (e *ErrUnknownBoard) Error() string {
 	return fmt.Sprintf("cannot identify %s", e.Target.Describe())
 }
 
+// Option is one firmware a device can be flashed with: a project, a variant
+// and the release those resolve to.
+type Option struct {
+	ProjectID   string
+	ProjectName string
+	Variant     string
+	Version     string
+	Method      catalog.Method
+}
+
+// Key is the stable identifier a picker returns.
+func (o Option) Key() string { return o.ProjectID + "\x00" + o.Variant }
+
+// Label renders the choice for a human.
+func (o Option) Label() string {
+	if o.Variant == "" {
+		return o.ProjectName
+	}
+	return o.ProjectName + " · " + o.Variant
+}
+
+// Options lists every firmware available for a device, newest release per
+// project and variant.
+//
+// This is what makes switching firmware possible: a board remembered as
+// running Meshtastic can be shown the MeshCore builds that also target it,
+// rather than being silently re-flashed with what it had last time.
+func Options(cat *catalog.Catalog, deviceID string, req Request) []Option {
+	var out []Option
+
+	for pi := range cat.Projects {
+		p := &cat.Projects[pi]
+		if req.ProjectID != "" && p.ID != req.ProjectID {
+			continue
+		}
+		rel, err := pickRelease(p, deviceID, req)
+		if err != nil {
+			continue
+		}
+		for _, b := range rel.BuildsForDevice(deviceID) {
+			out = append(out, Option{
+				ProjectID:   p.ID,
+				ProjectName: p.Name,
+				Variant:     b.Variant,
+				Version:     rel.Version,
+				Method:      b.Method,
+			})
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ProjectID != out[j].ProjectID {
+			return out[i].ProjectID < out[j].ProjectID
+		}
+		return out[i].Variant < out[j].Variant
+	})
+	return out
+}
+
 // Resolve builds a plan for one target from an explicit request.
 func Resolve(cat *catalog.Catalog, t device.Target, req Request) (*Plan, error) {
 	dev, err := resolveDevice(cat, t, req.DeviceID)

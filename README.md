@@ -68,6 +68,11 @@ Will flash 3 board(s)
   ...
 ```
 
+`meshflash flash` on a remembered board offers what it is currently running
+first, with every other firmware that targets it underneath, so switching a
+node between Meshtastic and MeshCore is picking a different line. `--auto`
+skips the question and re-flashes what it had.
+
 Boards it has never seen are reported and skipped rather than guessed at.
 `meshflash auto --probe` will read the eFuse MAC of unrecognised ESP32 boards
 to identify them, which costs a reset and so stays opt-in.
@@ -155,7 +160,8 @@ Do this while you still have a network:
 
 1. `meshflash configure` — select only the boards you carry. Selecting
    everything means hundreds of megabytes.
-2. `meshflash update --prune` — cache firmware, discard source archives.
+2. Say yes when it offers to download — or `meshflash update --prune` later, which
+   also discards the source archives once the firmware is extracted.
 3. `meshflash doctor --drivers` — install the USB-UART drivers. **On Windows a
    board with no driver never appears as a serial port at all**, which is the
    single largest source of "it doesn't show up" in the field. CH340 is the

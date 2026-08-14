@@ -25,6 +25,7 @@ func (a *App) cmdFlash(ctx context.Context, args []string) error {
 	verify := fs.Bool("verify", false, "read back and compare after writing")
 	noAuto := fs.Bool("no-auto-bootloader", false, "do not reboot into the bootloader automatically")
 	remember := fs.Bool("remember", true, "record this board for `meshflash auto`")
+	auto := fs.Bool("auto", false, "use the firmware this board had last time, without prompting")
 	dryRun := fs.Bool("dry-run", false, "show what would be flashed and stop")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -56,7 +57,7 @@ func (a *App) cmdFlash(ctx context.Context, args []string) error {
 		Version:   *version,
 	}
 
-	p, err := a.resolveInteractively(cat, target, req)
+	p, err := a.resolveInteractively(cat, target, req, *auto)
 	if err != nil {
 		return err
 	}
@@ -133,13 +134,19 @@ func (a *App) chooseTarget(targets []device.Target, want string) (device.Target,
 // The prompts are the whole point: USB enumeration usually cannot tell a
 // Heltec V3 from a T-Beam, so meshflash asks rather than guessing — and then
 // remembers the answer so it never has to ask about that board again.
-func (a *App) resolveInteractively(cat *catalog.Catalog, target device.Target, req plan.Request) (*plan.Plan, error) {
-	// If this board has been flashed before, offer its remembered answer as
-	// the default rather than asking again.
+func (a *App) resolveInteractively(cat *catalog.Catalog, target device.Target, req plan.Request, auto bool) (*plan.Plan, error) {
+	// A remembered board resolves without any prompting under --auto. Without
+	// it, recognition only supplies the default: re-flashing a node with
+	// different firmware is a normal thing to want, and silently repeating
+	// last time's choice makes that impossible.
 	if req.DeviceID == "" && req.ProjectID == "" {
 		if p, err := plan.ResolveAuto(cat, a.Bindings, target, req); err == nil {
-			fmt.Fprintf(a.Out, "%s %s\n", tui.OK().Render(tui.GlyphOK), tui.Muted().Render("Recognised: "+p.Reason))
-			return p, nil
+			if auto {
+				fmt.Fprintf(a.Out, "%s %s\n", tui.OK().Render(tui.GlyphOK),
+					tui.Muted().Render("Recognised: "+p.Reason))
+				return p, nil
+			}
+			return a.chooseFirmware(cat, target, req, p)
 		}
 	}
 
@@ -180,6 +187,68 @@ func (a *App) resolveInteractively(cat *catalog.Catalog, target device.Target, r
 		}
 	}
 	return nil, errors.New("could not resolve which firmware to write")
+}
+
+// chooseFirmware offers every firmware that targets a recognised board, with
+// what it ran last time first and marked.
+func (a *App) chooseFirmware(cat *catalog.Catalog, target device.Target, req plan.Request, known *plan.Plan) (*plan.Plan, error) {
+	options := plan.Options(cat, known.Device.ID, req)
+	if len(options) <= 1 {
+		// Nothing to switch to; take the recognised answer.
+		fmt.Fprintf(a.Out, "%s %s\n", tui.OK().Render(tui.GlyphOK),
+			tui.Muted().Render("Recognised: "+known.Reason))
+		return known, nil
+	}
+
+	lastKey := known.Project.ID + "\x00" + known.Variant()
+
+	// Put the previous firmware at the top so enter repeats it.
+	sort.SliceStable(options, func(i, j int) bool {
+		return options[i].Key() == lastKey && options[j].Key() != lastKey
+	})
+
+	choices := make([]tui.Choice, 0, len(options))
+	for _, o := range options {
+		detail := o.Version + " · " + string(o.Method)
+		if o.Key() == lastKey {
+			detail += "  ← currently installed"
+		}
+		choices = append(choices, tui.Choice{Key: o.Key(), Title: o.Label(), Detail: detail})
+	}
+
+	name := known.Device.Name
+	if b, ok := a.Bindings.Lookup(known.Fingerprint); ok && b.Nickname != "" {
+		name = b.Nickname + " (" + known.Device.Name + ")"
+	}
+
+	key, err := tui.Pick("Which firmware?",
+		fmt.Sprintf("%s — last flashed with %s.", name, known.Project.Name), choices)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, o := range options {
+		if o.Key() != key {
+			continue
+		}
+		req.DeviceID = known.Device.ID
+		req.ProjectID = o.ProjectID
+		req.Variant = o.Variant
+
+		p, err := plan.Resolve(cat, target, req)
+		if err != nil {
+			return nil, err
+		}
+		p.Fingerprint = known.Fingerprint
+		p.Binding = known.Binding
+		if o.Key() == lastKey {
+			p.Reason = known.Reason
+		} else {
+			p.Reason = fmt.Sprintf("switching from %s to %s", known.Project.Name, o.Label())
+		}
+		return p, nil
+	}
+	return nil, fmt.Errorf("firmware choice %q disappeared", key)
 }
 
 func (a *App) promptAmbiguity(cat *catalog.Catalog, target device.Target, amb *plan.ErrAmbiguous) (string, error) {

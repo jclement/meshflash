@@ -265,3 +265,53 @@ func newTestBindings(t *testing.T) *bindings.Store {
 }
 
 func pathsIn(dir string) config.Paths { return config.Paths{Home: dir} }
+
+// A board remembered as running one firmware must still be offered the others,
+// or switching between Meshtastic and MeshCore would be impossible.
+func TestOptionsListsEveryFirmwareForADevice(t *testing.T) {
+	cat := testCatalog()
+
+	opts := Options(cat, "rak4631", Request{})
+	if len(opts) != 3 {
+		t.Fatalf("got %d options, want 3 (meshtastic + two meshcore roles): %+v", len(opts), opts)
+	}
+
+	seen := map[string]bool{}
+	for _, o := range opts {
+		seen[o.Key()] = true
+		if o.Version == "" || o.Method == "" {
+			t.Errorf("option %+v is missing a version or method", o)
+		}
+	}
+	for _, want := range []string{
+		"meshtastic\x00",
+		"meshcore\x00companion_radio_ble",
+		"meshcore\x00companion_radio_usb",
+	} {
+		if !seen[want] {
+			t.Errorf("options are missing %q", want)
+		}
+	}
+}
+
+func TestOptionsRespectsProjectFilter(t *testing.T) {
+	cat := testCatalog()
+	opts := Options(cat, "rak4631", Request{ProjectID: "meshcore"})
+	if len(opts) != 2 {
+		t.Fatalf("got %d options, want the 2 meshcore roles", len(opts))
+	}
+	for _, o := range opts {
+		if o.ProjectID != "meshcore" {
+			t.Errorf("project filter leaked %s", o.ProjectID)
+		}
+	}
+}
+
+// A device only one project targets has nothing to switch to.
+func TestOptionsForSingleProjectDevice(t *testing.T) {
+	cat := testCatalog()
+	opts := Options(cat, "heltec-v3", Request{})
+	if len(opts) != 1 || opts[0].ProjectID != "meshtastic" {
+		t.Fatalf("got %+v, want just the meshtastic build", opts)
+	}
+}

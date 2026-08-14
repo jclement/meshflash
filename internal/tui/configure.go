@@ -114,8 +114,11 @@ type configureModel struct {
 	// initial is the selection on entry, used to detect unsaved changes.
 	initial map[string]bool
 
-	mode   viewMode
-	filter textinput.Model
+	mode viewMode
+	// attachedShown is how many of the leading visible rows are attached
+	// boards, which is where the section break goes.
+	attachedShown int
+	filter        textinput.Model
 	// filtering is true while the search box has focus.
 	filtering bool
 	// confirming is true while the save/discard prompt is up.
@@ -150,7 +153,13 @@ func (m *configureModel) resetView() {
 func (m *configureModel) applyView() {
 	terms := strings.Fields(strings.ToLower(m.filter.Value()))
 
+	// Boards that are plugged in go first, in their own section.
+	//
+	// The overwhelmingly common task is "configure what I am holding", and
+	// hunting for those few boards in a list of two hundred is the whole
+	// friction. Everything else keeps its alphabetical order below.
 	m.visible = m.visible[:0]
+	var rest []int
 	for i, r := range m.rows {
 		switch m.mode {
 		case viewAttached:
@@ -162,10 +171,17 @@ func (m *configureModel) applyView() {
 				continue
 			}
 		}
-		if matchesAll(r.searchText(), terms) {
+		if !matchesAll(r.searchText(), terms) {
+			continue
+		}
+		if r.Attached {
 			m.visible = append(m.visible, i)
+		} else {
+			rest = append(rest, i)
 		}
 	}
+	m.attachedShown = len(m.visible)
+	m.visible = append(m.visible, rest...)
 
 	if m.cursor >= len(m.visible) {
 		m.cursor = max(len(m.visible)-1, 0)
@@ -188,7 +204,16 @@ func matchesAll(haystack string, terms []string) bool {
 }
 
 // listHeight is how many rows fit, leaving room for the header and footer.
-func (m *configureModel) listHeight() int { return max(m.height-10, 3) }
+//
+// The section headers are drawn inside the list, so they have to come out of
+// the same budget or the footer gets pushed off the bottom of the screen.
+func (m *configureModel) listHeight() int {
+	h := m.height - 10
+	if m.splitSections() {
+		h -= 2
+	}
+	return max(h, 3)
+}
 
 // dirty reports whether the selection differs from the one we started with.
 func (m *configureModel) dirty() bool {
@@ -436,6 +461,13 @@ func (m *configureModel) View() tea.View {
 	for i := m.offset; i < end; i++ {
 		r := m.rows[m.visible[i]]
 
+		// A section header goes at each boundary, and also at the top of the
+		// window when it opens mid-section, so you can always tell which half
+		// of the list you are looking at.
+		if h := m.sectionHeader(i); h != "" {
+			b.WriteString("  " + h + "\n")
+		}
+
 		check := Muted().Render("[ ]")
 		if m.selected[r.ID] {
 			check = OK().Render("[x]")
@@ -469,6 +501,26 @@ func (m *configureModel) View() tea.View {
 	// on exit.
 	v.AltScreen = true
 	return v
+}
+
+// splitSections reports whether the list is showing both attached and
+// non-attached boards, and so needs headers to separate them.
+func (m *configureModel) splitSections() bool {
+	return m.attachedShown > 0 && m.attachedShown < len(m.visible)
+}
+
+// sectionHeader returns the header to draw above visible row i, or "".
+func (m *configureModel) sectionHeader(i int) string {
+	if !m.splitSections() {
+		return ""
+	}
+	switch {
+	case i == 0 || (i == m.offset && i < m.attachedShown):
+		return OK().Render(fmt.Sprintf("connected now (%d)", m.attachedShown))
+	case i == m.attachedShown || (i == m.offset && i > m.attachedShown):
+		return Muted().Render(fmt.Sprintf("all other boards (%d)", len(m.visible)-m.attachedShown))
+	}
+	return ""
 }
 
 // scopeLine describes what the list is currently showing.

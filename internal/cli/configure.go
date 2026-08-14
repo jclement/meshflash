@@ -34,7 +34,7 @@ func (a *App) cmdConfigure(ctx context.Context, args []string) error {
 
 	// Non-interactive edits, for scripting a field kit.
 	if *add != "" || *remove != "" {
-		return a.editSelection(*add, *remove)
+		return a.editSelection(ctx, *add, *remove)
 	}
 
 	// Highlight what is plugged in right now.
@@ -61,14 +61,13 @@ func (a *App) cmdConfigure(ctx context.Context, args []string) error {
 		tui.OK().Render(tui.GlyphOK), len(chosen), a.Paths.ConfigFile())
 	a.printSelection()
 
-	if len(chosen) > 0 {
-		fmt.Fprintln(a.Out)
-		fmt.Fprintln(a.Out, tui.Muted().Render("Run `meshflash update` to download firmware for these boards."))
+	if len(chosen) == 0 {
+		return nil
 	}
-	return nil
+	return a.offerDownload(ctx, cat)
 }
 
-func (a *App) editSelection(add, remove string) error {
+func (a *App) editSelection(ctx context.Context, add, remove string) error {
 	cat, err := a.requireCatalog()
 	if err != nil {
 		return err
@@ -107,7 +106,7 @@ func (a *App) editSelection(add, remove string) error {
 		return err
 	}
 	a.printSelection()
-	return nil
+	return a.offerDownload(ctx, cat)
 }
 
 func (a *App) printSelection() {

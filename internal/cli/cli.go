@@ -278,10 +278,17 @@ Flags:
 With no arguments this is interactive: pick the target, then the firmware.
 Supply flags to skip the prompts and script it.
 
+For a board meshflash has flashed before, the firmware it is currently running
+is offered first and marked, with everything else that targets it listed
+underneath — so switching a node between Meshtastic and MeshCore, or between
+MeshCore roles, is just picking a different line. Pass --auto to skip that and
+re-flash what it had last time.
+
 Usage:
   meshflash flash [flags]
 
 Flags:
+  --auto             re-flash what this board had last time, without asking
   --port NAME        serial port or bootloader volume to write
   --device ID        catalog device id (e.g. rak4631)
   --project ID       meshtastic or meshcore
@@ -292,6 +299,7 @@ Flags:
   --no-auto-bootloader
                      do not reboot the board into its bootloader automatically
   --remember=false   do not record this board for ` + "`meshflash auto`" + `
+  --dry-run          show what would be flashed and stop
 `,
 		"doctor": `meshflash doctor — show what is attached and what is wrong
 
@@ -360,4 +368,12 @@ Usage:
 		return
 	}
 	fmt.Fprintf(w, "no help for %q\n", cmd)
+}
+
+// plural renders "1 board" / "2 boards".
+func plural(n int, singular string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	return fmt.Sprintf("%d %ss", n, singular)
 }
