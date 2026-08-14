@@ -46,6 +46,8 @@ type Report struct {
 	Targets []device.Target `json:"targets"`
 	// MissingDrivers lists driver downloads implied by attached hardware.
 	MissingDrivers []DriverHint `json:"missing_drivers,omitempty"`
+	// RejectedVolumes are mount points examined and not treated as bootloaders.
+	RejectedVolumes []device.Rejection `json:"rejected_volumes,omitempty"`
 }
 
 // DriverHint names a driver an operator may need.
@@ -104,7 +106,37 @@ func Run(opts Options) Report {
 	r.Checks = append(r.Checks, checkTargets(r.Targets))
 	r.MissingDrivers = driverHints(det)
 
+	// Mount points that were examined and turned down. A board sitting in its
+	// bootloader that meshflash cannot see is otherwise indistinguishable from
+	// a board that never rebooted, and on macOS the usual cause is a removable
+	// volume permission the terminal has not been granted.
+	if _, rejected, err := device.ScanVolumesVerbose(); err == nil {
+		r.RejectedVolumes = rejected
+		if c, ok := checkRejectedVolumes(rejected); ok {
+			r.Checks = append(r.Checks, c)
+		}
+	}
+
 	return r
+}
+
+// checkRejectedVolumes flags mount points that could not be read at all, which
+// is a fixable permission problem rather than an ordinary non-bootloader disk.
+func checkRejectedVolumes(rejected []device.Rejection) (Check, bool) {
+	for _, r := range rejected {
+		if !strings.Contains(r.Reason, "permission denied") {
+			continue
+		}
+		return Check{
+			Name:   "Removable volume access",
+			Status: StatusFail,
+			Detail: fmt.Sprintf("%s is mounted but cannot be read", r.Path),
+			Fix: "Grant your terminal access under System Settings → Privacy & Security → " +
+				"Files and Folders → Removable Volumes, then restart the terminal. " +
+				"Without it a board in its UF2 bootloader is invisible to meshflash.",
+		}, true
+	}
+	return Check{}, false
 }
 
 func checkHome(p config.Paths) Check {

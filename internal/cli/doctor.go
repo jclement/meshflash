@@ -125,6 +125,18 @@ func (a *App) printReport(r doctor.Report) {
 		}
 	}
 
+	// Every mounted volume that was looked at and turned down. When a board is
+	// sitting in its bootloader and meshflash cannot see it, this is the line
+	// that says why.
+	if len(r.RejectedVolumes) > 0 {
+		fmt.Fprintln(a.Out)
+		fmt.Fprintln(a.Out, tui.Heading().Render("Other mounted volumes"))
+		for _, v := range r.RejectedVolumes {
+			fmt.Fprintf(a.Out, "  %s %s\n", tui.Muted().Render(tui.GlyphPending), v.Path)
+			fmt.Fprintf(a.Out, "      %s\n", tui.Muted().Render(v.Reason))
+		}
+	}
+
 	if len(r.MissingDrivers) > 0 {
 		fmt.Fprintln(a.Out)
 		fmt.Fprintln(a.Out, tui.Heading().Render("Drivers in use"))

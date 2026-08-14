@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jclement/meshflash/internal/catalog"
@@ -89,25 +90,54 @@ func resolveUF2Volume(ctx context.Context, req Request, log *slog.Logger) (devic
 
 	req.Progress.emit("bootloader", "Rebooting the device into its bootloader…", 0, 0)
 
+	// Anything the wait learns about a rejected volume is the most valuable
+	// thing on screen, so it replaces the status line rather than adding to it.
+	var rejections []device.Rejection
+
 	vol, err := device.EnterUF2Bootloader(ctx, req.Target, device.EnterBootloaderOptions{
 		Logger: log,
 		OnManualPrompt: func() {
-			msg := "Automatic bootloader entry did not take. Double-tap the reset button on the board."
-			req.Progress.emit("bootloader", msg, 0, 0)
+			// Status line only. Echoing into the log pane as well just printed
+			// the same sentence twice.
+			req.Progress.emit("bootloader",
+				"Automatic bootloader entry did not take — double-tap the reset button on the board.", 0, 0)
+		},
+		OnVolumeRejected: func(r device.Rejection) {
+			rejections = append(rejections, r)
+			req.Progress.emit("bootloader",
+				fmt.Sprintf("Found %s but cannot use it: %s", r.Path, r.Reason), 0, 0)
 			if req.OnManualPrompt != nil {
-				req.OnManualPrompt(msg)
+				req.OnManualPrompt(fmt.Sprintf("%s: %s", r.Path, r.Reason))
 			}
 		},
 	})
 	if err != nil {
 		if errors.Is(err, device.ErrBootloaderTimeout) {
-			return device.Volume{}, fmt.Errorf(
-				"the board never presented a UF2 bootloader volume.\n" +
-					"Double-tap the reset button quickly — the bootloader should appear as a USB drive — then run the flash again")
+			return device.Volume{}, bootloaderTimeoutError(rejections)
 		}
 		return device.Volume{}, err
 	}
 	return vol, nil
+}
+
+// bootloaderTimeoutError explains the failure using whatever was actually
+// observed, because "no bootloader appeared" and "a bootloader appeared and I
+// could not read it" need completely different fixes.
+func bootloaderTimeoutError(rejections []device.Rejection) error {
+	if len(rejections) > 0 {
+		var b strings.Builder
+		b.WriteString("a volume appeared but meshflash could not use it as a bootloader:\n")
+		for _, r := range rejections {
+			fmt.Fprintf(&b, "  %s — %s\n", r.Path, r.Reason)
+		}
+		b.WriteString("\nRun `meshflash doctor` to see every mounted volume and why each was rejected.")
+		return errors.New(b.String())
+	}
+	return errors.New(
+		"the board never presented a UF2 bootloader volume.\n" +
+			"Double-tap the reset button quickly — the bootloader should appear as a USB drive — then try again.\n" +
+			"If it does appear in your file manager, run `meshflash doctor`: on macOS a terminal needs\n" +
+			"Privacy & Security → Files and Folders → Removable Volumes before it can read one.")
 }
 
 // copyToBootloader writes the image, tolerating the disconnect that follows

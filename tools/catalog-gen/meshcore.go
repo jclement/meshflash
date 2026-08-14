@@ -189,7 +189,8 @@ func buildMeshCore(ctx context.Context, c *client, maxVersions int) (catalog.Pro
 
 // assembleMeshCoreBuild turns collected assets into one catalog build.
 func assembleMeshCoreBuild(key variantKey, mb *meshcoreBuild) (catalog.Build, catalog.Device, bool) {
-	id := slugify(key.device)
+	// Fold onto the shared id so both projects' firmware lands on one board.
+	id := canonicalDeviceID(slugify(key.device))
 
 	dev := catalog.Device{
 		ID:     id,

@@ -54,11 +54,18 @@ type EnterBootloaderOptions struct {
 	// bootloader, so the UI can tell the operator to double-tap reset. The
 	// scan keeps running afterwards, so a manual entry is still picked up.
 	OnManualPrompt func()
+	// OnVolumeRejected is called the first time a newly-appeared volume is
+	// examined and turned down, so the UI can say why rather than continuing
+	// to claim nothing has happened.
+	OnVolumeRejected func(Rejection)
 }
 
 func (o *EnterBootloaderOptions) applyDefaults() {
 	if o.Timeout == 0 {
-		o.Timeout = 30 * time.Second
+		// Generous, because the operator is standing there with the board and
+		// a double-tap reset can take a couple of tries to land. Giving up
+		// after half a minute means starting the whole command again.
+		o.Timeout = 3 * time.Minute
 	}
 	if o.PollInterval == 0 {
 		o.PollInterval = 500 * time.Millisecond
@@ -130,8 +137,13 @@ func waitForNewVolume(ctx context.Context, known map[string]bool, opts EnterBoot
 	ticker := time.NewTicker(opts.PollInterval)
 	defer ticker.Stop()
 
+	// Rejections are reported once each. A board that mounts but is not
+	// recognised — the macOS removable-volume permission case — otherwise
+	// looks identical to a board that never rebooted at all.
+	reported := map[string]bool{}
+
 	for {
-		vols, err := ScanVolumes()
+		vols, rejected, err := ScanVolumesVerbose()
 		if err != nil {
 			opts.Logger.Debug("volume scan failed", "error", err)
 		}
@@ -142,6 +154,19 @@ func waitForNewVolume(ctx context.Context, known map[string]bool, opts EnterBoot
 				// anything tries to copy onto it.
 				time.Sleep(300 * time.Millisecond)
 				return v, nil
+			}
+		}
+		for _, r := range rejected {
+			if known[r.Path] || reported[r.Path] {
+				continue
+			}
+			reported[r.Path] = true
+			// A volume that appeared after the touch and was still rejected is
+			// almost certainly the bootloader we are waiting for.
+			opts.Logger.Warn("a new volume appeared but was not recognised as a bootloader",
+				"path", r.Path, "reason", r.Reason)
+			if opts.OnVolumeRejected != nil {
+				opts.OnVolumeRejected(r)
 			}
 		}
 

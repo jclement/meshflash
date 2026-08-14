@@ -293,7 +293,15 @@ func (m *flashModel) View() tea.View {
 	} else {
 		b.WriteString(Help().Render("ctrl+c cancel"))
 	}
-	return tea.NewView(b.String())
+
+	v := tea.NewView(b.String())
+	// The alternate screen keeps this from smearing down the scrollback.
+	// Inline rendering repaints in place only while the frame height is
+	// stable, and this view grows as jobs complete and log lines arrive, so
+	// each growth left the previous frame stranded above the new one. The
+	// summary is reprinted after the program exits, so nothing is lost.
+	v.AltScreen = true
+	return v
 }
 
 // capitalize upper-cases the first letter of an ASCII stage name.

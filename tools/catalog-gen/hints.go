@@ -16,6 +16,71 @@ import (
 // ever produce a "possible" match. The UF2 board IDs are the valuable half —
 // those come from the board's own INFO_UF2.TXT and identify it exactly.
 
+// deviceAliases maps a MeshCore device slug onto the canonical device id,
+// which is Meshtastic's platformioTarget.
+//
+// The two projects name the same hardware differently — MeshCore derives its
+// slug from a release asset name, Meshtastic uses its PlatformIO target — so
+// without this a Heltec T114 exists twice in the catalog, as
+// "heltec-mesh-node-t114" and "heltec-t114". That is not just untidy: a board
+// bound to one id can never be offered the other project's firmware, so
+// switching a node between Meshtastic and MeshCore becomes impossible.
+//
+// Entries must be one-to-one. Where MeshCore splits a board that Meshtastic
+// treats as one (t-beam by radio chip, station-g3 by logging) the mapping
+// would be many-to-one, and folding those together would make two different
+// firmware images collide on the same key — so those stay separate. Boards
+// only one project supports need no entry.
+var deviceAliases = map[string]string{
+	// Heltec
+	"heltec-t114":       "heltec-mesh-node-t114",
+	"heltec-t1":         "heltec-mesh-node-t1",
+	"heltec-t096":       "heltec-mesh-node-t096",
+	"heltec-e213":       "heltec-vision-master-e213",
+	"heltec-e290":       "heltec-vision-master-e290",
+	"heltec-wsl3":       "heltec-wsl-v3",
+	"heltec-tracker-v2": "heltec-wireless-tracker-v2",
+
+	// RAK
+	"rak-4631":        "rak4631",
+	"rak-11310":       "rak11310",
+	"rak-wismesh-tag": "rak_wismeshtag",
+
+	// Seeed
+	"xiao-nrf52":       "seeed_xiao_nrf52840_kit",
+	"xiao-s3":          "seeed-xiao-s3",
+	"wiotrackerl1":     "seeed_wio_tracker_L1",
+	"wiotrackerl1eink": "seeed_wio_tracker_L1_eink",
+	"t1000e":           "tracker-t1000-e",
+	"wio-wm1110":       "wio-tracker-wm1110",
+
+	// LilyGo
+	"lilygo-t-echo":            "t-echo",
+	"lilygo-t-echo-lite":       "t-echo-lite",
+	"lilygo-t-impulse-plus":    "t-impulse-plus",
+	"lilygo-tdeck":             "t-deck",
+	"lilygo-tbeam-1w":          "t-beam-1w",
+	"lilygo-tlora-v2-1-1-6":    "tlora-v2-1-1_6",
+	"lilygo-teth-elite-sx1262": "t-eth-elite",
+
+	// Others
+	"m5stack-unit-c6l": "m5stack-unitc6l",
+	"thinknode-m1":     "thinknode_m1",
+	"thinknode-m2":     "thinknode_m2",
+	"thinknode-m3":     "thinknode_m3",
+	"thinknode-m5":     "thinknode_m5",
+	"thinknode-m6":     "thinknode_m6",
+	"thinknode-m7":     "thinknode_m7",
+}
+
+// canonicalDeviceID resolves a project-specific slug to the shared id.
+func canonicalDeviceID(id string) string {
+	if canon, ok := deviceAliases[id]; ok {
+		return canon
+	}
+	return id
+}
+
 // uf2BoardHints maps a catalog device id substring to the Board-ID strings its
 // bootloader publishes.
 var uf2BoardHints = map[string][]string{
