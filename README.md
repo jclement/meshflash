@@ -94,8 +94,19 @@ watching, so a manual entry is still picked up.
 For ESP32 it uses `ResetAuto`, trying the classic DTR/RTS sequence and then the
 USB-JTAG one, since boards in this space use both.
 
-If a UF2 bootloader never mounts — automount disabled, headless machine —
-meshflash falls back to serial DFU when the build ships a package.
+On nRF52 the touch does not give you a drive at all. Adafruit's bootloader
+distinguishes its entry paths:
+
+```
+DFU_MAGIC_SERIAL_ONLY_RESET : with CDC interface only
+DFU_MAGIC_UF2_RESET         : with CDC and MSC interfaces
+```
+
+A magic-baud touch selects serial-only, so no USB drive ever appears — mass
+storage comes up solely after a double-tap reset. meshflash detects that case
+and switches to serial DFU, converting the `.uf2` to a raw image and
+synthesising the init packet, since Meshtastic publishes no DFU package. Without
+that, automatic bootloader entry could never finish a flash on those boards.
 
 ## The wipe is optional, and off by default
 

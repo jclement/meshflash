@@ -114,6 +114,10 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 	}
 	known := volumeSet(before)
 
+	// Ports before the touch, so the bootloader's own CDC port can be told
+	// apart from the application's afterwards.
+	portsBefore, _ := ListPorts()
+
 	// Two attempts before asking for help.
 	//
 	// Meshtastic's own installer documents this: "Some hardware requires this
@@ -141,6 +145,19 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 		}
 	}
 
+	// No drive — but the board may well be in its bootloader anyway.
+	//
+	// Adafruit's bootloader exposes CDC only when it was entered by a
+	// magic-baud touch, and CDC plus mass storage only after a double-tap
+	// reset. Finding a bootloader serial port here means the touch worked
+	// perfectly and there simply is no drive to wait for, so the caller should
+	// switch to serial DFU rather than nagging for a button press.
+	if port, err := WaitForBootloaderPort(ctx, portsBefore, 2*time.Second); err == nil {
+		opts.Logger.Info("bootloader is up in serial-only mode; no mass storage will appear",
+			"port", port.Name)
+		return Volume{}, &SerialOnlyBootloaderError{Port: port}
+	}
+
 	// The touch did not take. Some boards need the button.
 	if opts.OnManualPrompt != nil {
 		opts.OnManualPrompt()
@@ -148,6 +165,14 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 	opts.Logger.Warn("automatic bootloader entry did not take; waiting for a manual double-tap reset")
 
 	return waitForNewVolume(ctx, known, opts, 0)
+}
+
+// SerialOnlyBootloaderError reports that the device is in its bootloader but
+// exposing no mass storage, so the flash must go over serial DFU.
+type SerialOnlyBootloaderError struct{ Port Port }
+
+func (e *SerialOnlyBootloaderError) Error() string {
+	return fmt.Sprintf("bootloader on %s is in serial-only mode and exposes no USB drive", e.Port.Name)
 }
 
 // waitForNewVolume polls until a volume appears that was not in `known`.
@@ -205,6 +230,50 @@ func waitForNewVolume(ctx context.Context, known map[string]bool, opts EnterBoot
 			}
 			return Volume{}, ctx.Err()
 		case <-ticker.C:
+		}
+	}
+}
+
+// WaitForBootloaderPort waits for a serial port belonging to an nRF52
+// bootloader to appear.
+//
+// A 1200-baud touch puts the Adafruit bootloader into serial-only mode, where
+// it exposes CDC and no mass storage. The board re-enumerates, so the
+// bootloader's port is usually a different device node from the application's
+// — which is why this looks for any port carrying a bootloader USB id rather
+// than waiting for the original name to come back.
+func WaitForBootloaderPort(ctx context.Context, before []Port, timeout time.Duration) (Port, error) {
+	known := map[string]bool{}
+	for _, p := range before {
+		known[p.Name] = true
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		ports, err := ListPorts()
+		if err == nil {
+			// A newly-appeared bootloader port is the best match.
+			for _, p := range ports {
+				if LooksLikeNRF52Bootloader(p) && !known[p.Name] {
+					return p, nil
+				}
+			}
+			// Failing that, one that was already there — the board may have
+			// been sitting in its bootloader before we started.
+			for _, p := range ports {
+				if LooksLikeNRF52Bootloader(p) {
+					return p, nil
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return Port{}, fmt.Errorf("no nRF52 bootloader serial port appeared within %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return Port{}, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
