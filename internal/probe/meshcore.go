@@ -67,11 +67,21 @@ var meshCoreQueries = []struct {
 
 // MeshCore asks a device for its identity over the serial CLI.
 //
-// MeshCore's binary companion protocol is only served by companion_radio_usb
-// builds; a BLE companion, a repeater or a room server does not answer it over
-// the wire at all — verified against hardware, where framed commands came back
-// echoed byte for byte. All of them do answer this text CLI, which makes it
-// the identification path that works across every MeshCore build.
+// Which MeshCore builds answer anything at all over serial, established on a
+// Heltec T114:
+//
+//   - repeater: answers this CLI. Framed binary commands come back echoed
+//     byte for byte, so the companion protocol is not served.
+//   - companion_radio_ble: answers nothing. No CLI, no binary protocol, no
+//     unprompted output, and not even an echo — silent under every
+//     DTR/RTS combination. Its USB CDC is inert; it talks over BLE only.
+//   - companion_radio_usb: expected to serve the binary companion protocol,
+//     which is what that build exists for. Untested.
+//
+// So serial identification covers some MeshCore builds and not others, and a
+// silent port is a legitimate answer rather than a fault. The gap is covered
+// by bindings: a board meshflash has flashed is recognised by its USB serial
+// number without needing to ask it anything.
 func MeshCore(ctx context.Context, opts Options) (*MeshCoreInfo, error) {
 	opts.applyDefaults()
 

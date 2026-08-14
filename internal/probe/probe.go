@@ -37,6 +37,10 @@ func (f Firmware) String() string {
 }
 
 // ErrUnknownFirmware means neither project answered.
+//
+// This is a normal outcome, not necessarily a fault. A MeshCore
+// companion_radio_ble build exposes nothing over serial at all, and a board
+// sitting in a bootloader has no application to ask.
 var ErrUnknownFirmware = errors.New("device did not identify its firmware")
 
 // Identify asks a device what it is running.

@@ -74,9 +74,31 @@ func (a *App) printFirmware(ctx context.Context, r doctor.Report) {
 		cancel()
 
 		if err != nil {
-			fmt.Fprintf(a.Out, "    %s\n", tui.Muted().Render(
-				"did not answer — it may be in a bootloader, asleep, or running something else"))
 			a.Log.Debug("firmware probe failed", "port", t.Port.Name, "error", err)
+
+			// A silent board is not an unknown one. If meshflash has flashed
+			// it before, what was written is recorded against its serial
+			// number, which is the whole point of the bindings — and the only
+			// thing that works for a build exposing nothing over serial.
+			if b, ok := a.Bindings.Lookup(fingerprint.FromTarget(t)); ok {
+				fw := b.ProjectID
+				if b.Variant != "" {
+					fw += " · " + b.Variant
+				}
+				if b.LastVersion != "" {
+					fw += " · " + b.LastVersion
+				}
+				fmt.Fprintf(a.Out, "    %-12s %s\n", "remembered", tui.OK().Render(fw))
+				fmt.Fprintf(a.Out, "    %-12s %s\n", "",
+					tui.Muted().Render("did not answer, but meshflash flashed this board before"))
+				continue
+			}
+
+			fmt.Fprintf(a.Out, "    %s\n", tui.Muted().Render("no answer"))
+			fmt.Fprintf(a.Out, "    %s\n", tui.Muted().Render(
+				"Not every firmware talks over serial — a MeshCore BLE companion exposes"))
+			fmt.Fprintf(a.Out, "    %s\n", tui.Muted().Render(
+				"nothing at all. Flash it once and it is remembered by serial number."))
 			continue
 		}
 
