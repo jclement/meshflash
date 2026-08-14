@@ -67,8 +67,10 @@ func Bar(width int, percent float64) string {
 	if filled > width {
 		filled = width
 	}
-	return lipgloss.NewStyle().Foreground(theme.Colors().Accent).
-		Render(strings.Repeat("█", filled)) +
+	// Use the themed style rather than building one from the palette directly:
+	// the palette is always populated, so constructing a style from it emits
+	// colour even when colour is switched off or output is piped.
+	return theme.S().Accent.Render(strings.Repeat("█", filled)) +
 		Muted().Render(strings.Repeat("░", width-filled))
 }
 

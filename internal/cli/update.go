@@ -116,11 +116,33 @@ func (a *App) cmdUpdate(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.Out, "%s cache: %s firmware, %s source archives\n",
 			tui.Muted().Render(tui.GlyphInfo),
 			store.FormatBytes(u.Extracted), store.FormatBytes(u.Downloads))
-		if u.Downloads > 0 {
+		// Only suggest pruning when it would actually reclaim something.
+		// After a prune the remaining downloads are standalone artifacts —
+		// MeshCore ships .bin/.uf2/.zip directly — which *are* the firmware
+		// and can never be removed, so repeating the hint would be wrong.
+		if !*prune && a.prunableBytes(wanted) > 0 {
 			fmt.Fprintln(a.Out, tui.Muted().Render("  Source archives can be removed with `meshflash update --prune` once firmware is extracted."))
 		}
 	}
 	return nil
+}
+
+// prunableBytes reports how much `--prune` would currently reclaim.
+func (a *App) prunableBytes(wanted []catalog.Artifact) int64 {
+	var n int64
+	seen := map[string]bool{}
+	for _, art := range wanted {
+		// Only packed artifacts have a separate archive to throw away, and
+		// only once the member has been extracted.
+		if !art.Packed() || seen[art.Archive] || !a.Store.Cached(art) {
+			continue
+		}
+		seen[art.Archive] = true
+		if a.Store.ArchiveCached(art) {
+			n += art.ArchiveSize
+		}
+	}
+	return n
 }
 
 // fetchArtifacts downloads and extracts, showing a single-line progress meter.

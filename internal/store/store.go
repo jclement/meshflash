@@ -120,6 +120,16 @@ func (s *Store) Cached(a catalog.Artifact) bool {
 	return err == nil && !st.IsDir() && st.Size() > 0
 }
 
+// ArchiveCached reports whether the source archive an artifact was extracted
+// from is still on disk, and therefore whether pruning would reclaim anything.
+func (s *Store) ArchiveCached(a catalog.Artifact) bool {
+	if !a.Packed() {
+		return false
+	}
+	st, err := os.Stat(s.archivePath(a.Archive))
+	return err == nil && !st.IsDir() && st.Size() > 0
+}
+
 // --- fetching -------------------------------------------------------------
 
 // Ensure makes an artifact available locally and returns its path.
