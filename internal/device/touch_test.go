@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -75,5 +76,33 @@ func TestLooksLikeNRF52Bootloader(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s:%s = %v, want %v", c.vid, c.pid, got, c.want)
 		}
+	}
+}
+
+// The serial-only signal must not be mistaken for a timeout.
+//
+// This is the entire no-button path: the flash layer routes
+// SerialOnlyBootloaderError to serial DFU, but only if it can still recognise
+// it. If this ever started matching ErrBootloaderTimeout it would be reported
+// as "the board never entered its bootloader" and the operator would be told
+// to press reset — exactly the behaviour the serial DFU path exists to remove.
+func TestSerialOnlyIsNotATimeout(t *testing.T) {
+	err := error(&SerialOnlyBootloaderError{Port: Port{Name: "/dev/cu.usbmodem2101"}})
+
+	if errors.Is(err, ErrBootloaderTimeout) {
+		t.Fatal("a serial-only bootloader is being reported as a timeout")
+	}
+
+	// It must survive wrapping, since the flash layer inspects a returned error.
+	wrapped := fmt.Errorf("entering bootloader: %w", err)
+	var serialOnly *SerialOnlyBootloaderError
+	if !errors.As(wrapped, &serialOnly) {
+		t.Fatal("SerialOnlyBootloaderError is not recoverable through a wrap")
+	}
+	if serialOnly.Port.Name != "/dev/cu.usbmodem2101" {
+		t.Errorf("port = %q", serialOnly.Port.Name)
+	}
+	if serialOnly.Error() == "" {
+		t.Error("error message is empty")
 	}
 }
