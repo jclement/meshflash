@@ -189,16 +189,45 @@ internal/tui             Bubble Tea views
 tools/catalog-gen        builds catalog.json from upstream (CI only)
 ```
 
-## Building
+## Development
+
+Tooling is managed with [mise](https://mise.jdx.dev):
 
 ```console
-$ go test ./...
-$ ./scripts/build.sh
+$ mise install          # go + goreleaser
+$ mise run dev          # build and run against an isolated ./.meshflash-dev home
+$ mise run dev flash    # ...with arguments
+$ mise run test         # go test -race ./...
+$ mise run check        # lint, test, and a cross-compile sweep
+$ mise run snapshot     # build release archives locally, no tag, no publish
+$ mise run catalog      # regenerate catalog.json from upstream
 ```
 
-Linux and Windows cross-compile with `CGO_ENABLED=0`. **macOS requires cgo**:
-`go.bug.st/serial`'s port enumerator binds IOKit, so darwin builds run on macOS
-runners rather than cross-compiling.
+`mise run dev` runs the built binary rather than `go run`, so Ctrl-C reaches
+meshflash — which matters when a flash is in progress and has to stop at a safe
+point.
+
+### Releasing
+
+```console
+$ mise run release          # prompts for patch / minor / major
+$ mise run release minor    # or say which
+```
+
+That validates the tree is clean and on `main`, shows the commits since the
+last tag, then tags and pushes. Pushing the tag is the only trigger: the
+`release` workflow runs GoReleaser, which builds all seven targets and
+publishes the archives with a `checksums.txt`.
+
+Releases build on a **macOS** runner, which looks odd but is the only single
+runner that can produce everything: `go.bug.st/serial`'s port enumerator binds
+IOKit, so darwin needs cgo and a macOS toolchain, while Linux and Windows are
+pure Go and cross-compile from there. Linux cannot build darwin; macOS can
+build both.
+
+Archive names are load-bearing — `meshflash upgrade` looks up
+`meshflash_<version>_<goos>_<goarch>` and `checksums.txt` by exact name. A test
+and a CI step both pin that contract against `.goreleaser.yaml`.
 
 ## License
 

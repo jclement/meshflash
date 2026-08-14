@@ -104,7 +104,20 @@ jobs:
           args: release --snapshot --clean --skip=publish
       - name: Confirm archive names match the self-updater
         run: |
-          # internal/selfupdate.AssetName builds these exact names; a mismatch
-          # would silently break `meshflash upgrade`.
-          ls -1 dist/*.tar.gz dist/*.zip
-          test -f dist/checksums.txt
+          # internal/selfupdate.AssetName builds these exact names. A mismatch
+          # would not surface until a release was published and `meshflash
+          # upgrade` failed for everyone at once, so it is checked here.
+          set -e
+          version="$(ls dist/meshflash_*_linux_amd64.tar.gz | sed -E 's/.*meshflash_(.+)_linux_amd64\.tar\.gz/\1/')"
+          echo "snapshot version: $version"
+          missing=0
+          for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64 linux_arm; do
+            f="dist/meshflash_${version}_${target}.tar.gz"
+            if [ -f "$f" ]; then echo "ok  $f"; else echo "MISSING $f"; missing=1; fi
+          done
+          for target in windows_amd64 windows_arm64; do
+            f="dist/meshflash_${version}_${target}.zip"
+            if [ -f "$f" ]; then echo "ok  $f"; else echo "MISSING $f"; missing=1; fi
+          done
+          if [ ! -f dist/checksums.txt ]; then echo "MISSING dist/checksums.txt"; missing=1; fi
+          exit $missing
