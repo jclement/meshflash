@@ -43,3 +43,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Repo-scoped PAT so GoReleaser can push the cask to
+          # jclement/homebrew-tap; the built-in GITHUB_TOKEN is scoped to this
+          # repository alone. Falls back so a release without the secret still
+          # succeeds, just without updating the tap.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.GITHUB_TOKEN }}

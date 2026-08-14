@@ -105,6 +105,31 @@ changelog:
     - title: Other
       order: 99
 
+homebrew_casks:
+  - name: meshflash
+    repository:
+      owner: jclement
+      name: homebrew-tap
+      # A repo-scoped PAT, because the default GITHUB_TOKEN cannot push to
+      # another repository. Without it the release still succeeds and only the
+      # tap update is skipped.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/jclement/meshflash
+    description: Flash Meshtastic and MeshCore firmware onto LoRa boards, offline-capable
+    license: MIT
+    # Only tagged releases belong in a tap.
+    skip_upload: auto
+    commit_author:
+      name: goreleaser
+      email: noreply@github.com
+    caveats: |
+      Run `meshflash update` once while online to fetch the firmware catalog,
+      then `meshflash configure` to choose which boards to cache firmware for.
+
+      On Linux, add yourself to the dialout group for serial access.
+      `meshflash doctor` checks this and everything else.
+
 release:
   draft: false
   prerelease: auto
