@@ -47,7 +47,9 @@ func (a *App) cmdConfigure(ctx context.Context, args []string) error {
 	}
 
 	rows := tui.BuildDeviceRows(cat, attached)
+	a.Session.MuteConsole(true)
 	chosen, err := tui.Configure(rows, a.Cfg.Devices)
+	a.Session.MuteConsole(false)
 	if err != nil {
 		return err
 	}

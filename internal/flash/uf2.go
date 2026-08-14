@@ -96,6 +96,14 @@ func resolveUF2Volume(ctx context.Context, req Request, log *slog.Logger) (devic
 
 	vol, err := device.EnterUF2Bootloader(ctx, req.Target, device.EnterBootloaderOptions{
 		Logger: log,
+		OnTouch: func(attempt, total int) {
+			msg := "Rebooting the device into its bootloader…"
+			if attempt > 1 {
+				msg = fmt.Sprintf("Retrying bootloader entry (%d of %d) — some boards need two tries…",
+					attempt, total)
+			}
+			req.Progress.emit("bootloader", msg, 0, 0)
+		},
 		OnManualPrompt: func() {
 			// Status line only. Echoing into the log pane as well just printed
 			// the same sentence twice.

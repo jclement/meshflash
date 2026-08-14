@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -16,22 +17,33 @@ import (
 //
 //	15:04:05 INFO  flashing device  device=rak4631 bytes=463104
 type consoleHandler struct {
-	w      io.Writer
-	level  slog.Level
-	color  bool
+	w     io.Writer
+	level slog.Level
+	color bool
+	// mute is shared with every clone made by WithAttrs/WithGroup, so muting
+	// the session silences derived loggers too.
+	mute   *atomic.Bool
 	attrs  []slog.Attr
 	groups []string
 }
 
-func newConsoleHandler(w io.Writer, level slog.Level, color bool) slog.Handler {
-	return &consoleHandler{w: w, level: level, color: color}
+func newConsoleHandler(w io.Writer, level slog.Level, color bool, mute *atomic.Bool) slog.Handler {
+	if mute == nil {
+		mute = new(atomic.Bool)
+	}
+	return &consoleHandler{w: w, level: level, color: color, mute: mute}
 }
 
 func (h *consoleHandler) Enabled(_ context.Context, l slog.Level) bool {
-	return l >= h.level
+	return l >= h.level && !h.mute.Load()
 }
 
 func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
+	// Re-checked here as well as in Enabled: the fanout may have decided to
+	// dispatch before a mute landed.
+	if h.mute.Load() {
+		return nil
+	}
 	s := theme.S()
 	var b strings.Builder
 

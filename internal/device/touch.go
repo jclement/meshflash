@@ -18,6 +18,16 @@ import (
 // the reset button and race the bootloader's timeout.
 const TouchBaud = 1200
 
+// touchAttempts is how many times the magic-baud reboot is tried before the
+// operator is asked to double-tap reset. Meshtastic's installer notes that
+// "some hardware requires this twice", and the Heltec T114 is one of them.
+const touchAttempts = 2
+
+// touchSettleBudget is how long each attempt waits for a volume to mount
+// before moving on. Long enough for a slow re-enumeration, short enough that
+// two attempts plus the prompt arrive quickly.
+const touchSettleBudget = 6 * time.Second
+
 // ErrBootloaderTimeout means the device never presented a bootloader volume.
 var ErrBootloaderTimeout = errors.New("device did not enter its UF2 bootloader")
 
@@ -54,6 +64,8 @@ type EnterBootloaderOptions struct {
 	// bootloader, so the UI can tell the operator to double-tap reset. The
 	// scan keeps running afterwards, so a manual entry is still picked up.
 	OnManualPrompt func()
+	// OnTouch is called before each automatic bootloader-entry attempt.
+	OnTouch func(attempt, total int)
 	// OnVolumeRejected is called the first time a newly-appeared volume is
 	// examined and turned down, so the UI can say why rather than continuing
 	// to claim nothing has happened.
@@ -102,19 +114,31 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 	}
 	known := volumeSet(before)
 
-	opts.Logger.Info("requesting bootloader entry", "port", t.Port.Name, "baud", TouchBaud)
-	if err := Touch(t.Port.Name); err != nil {
-		// A busy or vanished port is common here and not fatal: the device may
-		// already be rebooting. Keep scanning and let the timeout decide.
-		opts.Logger.Debug("touch did not complete cleanly", "error", err)
-	}
+	// Two attempts before asking for help.
+	//
+	// Meshtastic's own installer documents this: "Some hardware requires this
+	// twice." The first touch often only knocks the board out of its
+	// application, and the second is what lands it in the bootloader.
+	for attempt := 1; attempt <= touchAttempts; attempt++ {
+		opts.Logger.Info("requesting bootloader entry",
+			"port", t.Port.Name, "baud", TouchBaud, "attempt", attempt)
+		if opts.OnTouch != nil {
+			opts.OnTouch(attempt, touchAttempts)
+		}
 
-	vol, err := waitForNewVolume(ctx, known, opts, 8*time.Second)
-	if err == nil {
-		return vol, nil
-	}
-	if !errors.Is(err, ErrBootloaderTimeout) {
-		return Volume{}, err
+		if err := Touch(t.Port.Name); err != nil {
+			// A busy or vanished port is common here and not fatal: the device
+			// may already be rebooting. Keep scanning and let the wait decide.
+			opts.Logger.Debug("touch did not complete cleanly", "attempt", attempt, "error", err)
+		}
+
+		vol, err := waitForNewVolume(ctx, known, opts, touchSettleBudget)
+		if err == nil {
+			return vol, nil
+		}
+		if !errors.Is(err, ErrBootloaderTimeout) {
+			return Volume{}, err
+		}
 	}
 
 	// The touch did not take. Some boards need the button.

@@ -117,7 +117,7 @@ func (a *App) chooseTarget(targets []device.Target, want string) (device.Target,
 		choices = append(choices, tui.Choice{Key: t.Address(), Title: t.Describe(), Detail: detail})
 	}
 
-	key, err := tui.Pick("Choose a device", "Which board do you want to flash?", choices)
+	key, err := a.pick("Choose a device", "Which board do you want to flash?", choices)
 	if err != nil {
 		return device.Target{}, err
 	}
@@ -221,7 +221,7 @@ func (a *App) chooseFirmware(cat *catalog.Catalog, target device.Target, req pla
 		name = b.Nickname + " (" + known.Device.Name + ")"
 	}
 
-	key, err := tui.Pick("Which firmware?",
+	key, err := a.pick("Which firmware?",
 		fmt.Sprintf("%s — last flashed with %s.", name, known.Project.Name), choices)
 	if err != nil {
 		return nil, err
@@ -276,7 +276,7 @@ func (a *App) promptAmbiguity(cat *catalog.Catalog, target device.Target, amb *p
 		"variant": "Which build variant?",
 	}[amb.What]
 
-	return tui.Pick("Choose a "+amb.What, prompt, choices)
+	return a.pick("Choose a "+amb.What, prompt, choices)
 }
 
 // promptDeviceList offers every device the catalog knows, filtered to the
@@ -316,6 +316,14 @@ func (a *App) promptDeviceList(cat *catalog.Catalog, target device.Target) (stri
 		return choices[i].Title < choices[j].Title
 	})
 
-	return tui.Pick("Which board is this?",
+	return a.pick("Which board is this?",
 		fmt.Sprintf("%s did not identify itself.", target.Describe()), choices)
+}
+
+// pick runs an interactive chooser with console logging silenced, so a log
+// line cannot land in the middle of the rendered list.
+func (a *App) pick(title, prompt string, choices []tui.Choice) (string, error) {
+	a.Session.MuteConsole(true)
+	defer a.Session.MuteConsole(false)
+	return tui.Pick(title, prompt, choices)
 }

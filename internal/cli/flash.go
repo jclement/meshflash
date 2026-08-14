@@ -42,7 +42,13 @@ func (a *App) runPlans(ctx context.Context, plans []*plan.Plan, opts flashOption
 		jobs = append(jobs, a.buildJob(p, opts))
 	}
 
+	// The progress view repaints the whole terminal. Any log line written to
+	// stderr while it does lands mid-frame and shreds the display, so the
+	// console sink is silenced for the duration — everything still goes to the
+	// session file, which is where flash detail belongs anyway.
+	a.Session.MuteConsole(true)
 	outcomes, err := tui.RunFlash(ctx, jobs)
+	a.Session.MuteConsole(false)
 	if err != nil {
 		return err
 	}

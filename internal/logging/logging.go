@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +39,20 @@ type Session struct {
 
 	file *os.File
 	fan  *fanout
+	mute *atomic.Bool
+}
+
+// MuteConsole silences console output while leaving the file log untouched.
+//
+// This is not cosmetic. A full-screen view owns the terminal and repaints it;
+// anything else writing to stderr lands in the middle of a frame and shreds
+// it, producing overlapped half-lines. Every log line still reaches the
+// session file, which is where the detail belongs during a flash anyway.
+func (s *Session) MuteConsole(muted bool) {
+	if s == nil || s.mute == nil {
+		return
+	}
+	s.mute.Store(muted)
 }
 
 // Close flushes and closes the session log file.
@@ -54,10 +69,10 @@ func Setup(opts Options) (*Session, error) {
 	if opts.Keep <= 0 {
 		opts.Keep = 20
 	}
-	s := &Session{fan: &fanout{}}
+	s := &Session{fan: &fanout{}, mute: new(atomic.Bool)}
 
 	if opts.Console != nil {
-		s.fan.add(newConsoleHandler(opts.Console, opts.ConsoleLevel, !opts.NoColor))
+		s.fan.add(newConsoleHandler(opts.Console, opts.ConsoleLevel, !opts.NoColor, s.mute))
 	}
 
 	if opts.Dir != "" {
