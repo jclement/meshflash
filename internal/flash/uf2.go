@@ -119,6 +119,15 @@ func serialDFUFallback(ctx context.Context, req Request, log *slog.Logger, ports
 		return nil, errNoFallback
 	}
 
+	// Converting a UF2 and synthesising its init packet is unproven on
+	// hardware, so it stays opt-in. Falling back to the double-tap prompt is
+	// slower but uses a path that is known to work.
+	if !req.ExperimentalSerialDFU {
+		log.Warn("bootloader is serial-only; UF2-over-DFU is experimental and disabled",
+			"hint", "pass --experimental-serial-dfu to try it")
+		return nil, errNoFallback
+	}
+
 	// The wait may already have identified the bootloader's port.
 	var serialOnly *device.SerialOnlyBootloaderError
 	var port device.Port

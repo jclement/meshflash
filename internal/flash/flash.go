@@ -71,6 +71,19 @@ type Request struct {
 	// operator for a double-tap reset.
 	AutoBootloader bool
 
+	// ExperimentalSerialDFU allows converting a .uf2 to a raw image and
+	// pushing it over serial DFU when the bootloader comes up without mass
+	// storage.
+	//
+	// Off by default. The conversion and the synthesised init packet are
+	// verified against real firmware and against the bootloader's own
+	// validation source, but no such transfer has been observed to complete on
+	// hardware, and a board needed recovering while this path was in play.
+	// Until it is proven, the safe answer for a serial-only bootloader is to
+	// ask for a double-tap reset, which yields mass storage and a flash method
+	// that is known to work.
+	ExperimentalSerialDFU bool
+
 	Logger   *slog.Logger
 	Progress ProgressFunc
 

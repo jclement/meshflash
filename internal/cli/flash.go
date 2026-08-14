@@ -23,6 +23,8 @@ type flashOptions struct {
 	AutoBootloader bool
 	Remember       bool
 	DryRun         bool
+	// ExperimentalSerialDFU enables the unproven UF2-over-serial-DFU path.
+	ExperimentalSerialDFU bool
 }
 
 // runPlans executes a set of plans through the progress view and records the
@@ -74,16 +76,17 @@ func (a *App) buildJob(p *plan.Plan, opts flashOptions) tui.FlashJob {
 			}
 
 			res, err := flash.Flash(ctx, flash.Request{
-				Target:         p.Target,
-				Device:         p.Device,
-				Build:          p.Build,
-				Payloads:       payloads,
-				Erase:          opts.Erase,
-				Verify:         opts.Verify,
-				AutoBootloader: opts.AutoBootloader,
-				Logger:         a.Log,
-				Progress:       onFlash,
-				OnManualPrompt: func(msg string) { onLog(msg) },
+				Target:                p.Target,
+				Device:                p.Device,
+				Build:                 p.Build,
+				Payloads:              payloads,
+				Erase:                 opts.Erase,
+				Verify:                opts.Verify,
+				AutoBootloader:        opts.AutoBootloader,
+				ExperimentalSerialDFU: opts.ExperimentalSerialDFU,
+				Logger:                a.Log,
+				Progress:              onFlash,
+				OnManualPrompt:        func(msg string) { onLog(msg) },
 			})
 			if err != nil {
 				return nil, err

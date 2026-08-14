@@ -26,6 +26,7 @@ func (a *App) cmdFlash(ctx context.Context, args []string) error {
 	noAuto := fs.Bool("no-auto-bootloader", false, "do not reboot into the bootloader automatically")
 	remember := fs.Bool("remember", true, "record this board for `meshflash auto`")
 	auto := fs.Bool("auto", false, "use the firmware this board had last time, without prompting")
+	expDFU := fs.Bool("experimental-serial-dfu", false, "convert UF2 and flash over serial DFU when the bootloader has no drive (unproven)")
 	dryRun := fs.Bool("dry-run", false, "show what would be flashed and stop")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -72,10 +73,11 @@ func (a *App) cmdFlash(ctx context.Context, args []string) error {
 	}
 
 	return a.runPlans(ctx, []*plan.Plan{p}, flashOptions{
-		Erase:          *erase,
-		Verify:         *verify,
-		AutoBootloader: !*noAuto,
-		Remember:       *remember,
+		Erase:                 *erase,
+		Verify:                *verify,
+		AutoBootloader:        !*noAuto,
+		Remember:              *remember,
+		ExperimentalSerialDFU: *expDFU,
 	})
 }
 
