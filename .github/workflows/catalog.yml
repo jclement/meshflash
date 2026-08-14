@@ -93,17 +93,26 @@ jobs:
           name: catalog
           path: catalog.json
 
-      # Published to a moving `catalog` tag so clients can fetch a stable URL
-      # while still being able to pin an older release if a bad catalog ships.
+      # Published under a single fixed tag whose asset is replaced in place.
+      #
+      # Deliberately NOT /releases/latest/download: that resolves to the newest
+      # non-prerelease release, so the first software release would shadow the
+      # catalog and break `meshflash update` for everyone. A dedicated tag is
+      # stable regardless of what else gets released, and marking it a
+      # prerelease keeps it out of the way of `latest` in the other direction.
       - name: Publish
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          stamp="$(date -u +%Y%m%d-%H%M%S)"
-          gh release create "catalog-$stamp" catalog.json \
-            --title "Firmware catalog $stamp" \
-            --notes "Automatically generated firmware catalog." \
-            || gh release upload "catalog-$stamp" catalog.json --clobber
-          # `latest` is what config.DefaultCatalogURL points at.
-          gh release upload latest catalog.json --clobber || true
+          set -e
+          if gh release view catalog >/dev/null 2>&1; then
+            gh release upload catalog catalog.json --clobber
+            echo "replaced catalog.json on the existing 'catalog' release"
+          else
+            gh release create catalog catalog.json \
+              --title "Firmware catalog" \
+              --notes "Automatically generated firmware index, refreshed on a schedule. Fetched by \`meshflash update\`." \
+              --prerelease
+            echo "created the 'catalog' release"
+          fi

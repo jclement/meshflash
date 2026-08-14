@@ -17,9 +17,14 @@ import (
 )
 
 // DefaultCatalogURL is where `meshflash update` fetches the firmware index.
+//
 // It is a release asset rather than a raw branch file so the operator can pin
 // and roll back, and so a bad generator run does not immediately reach clients.
-const DefaultCatalogURL = "https://github.com/jclement/meshflash/releases/latest/download/catalog.json"
+//
+// The asset hangs off a dedicated `catalog` tag rather than /releases/latest/,
+// because "latest" tracks the newest non-prerelease release — which is a
+// meshflash version, not a catalog, and would shadow this the moment one ships.
+const DefaultCatalogURL = "https://github.com/jclement/meshflash/releases/download/catalog/catalog.json"
 
 // Paths resolves the layout of a meshflash home directory.
 type Paths struct {
