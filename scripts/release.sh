@@ -43,16 +43,25 @@ current_branch="$(git symbolic-ref --quiet --short HEAD || echo DETACHED)"
 [ -z "$(git status --porcelain)" ] ||
   die "working tree is dirty; commit or stash first"
 
+have_remote=false
 if git remote get-url origin >/dev/null 2>&1; then
   dim "fetching origin..."
-  git fetch --quiet origin --tags
-  local_head="$(git rev-parse HEAD)"
-  remote_head="$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")"
-  if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
-    if git merge-base --is-ancestor "$local_head" "$remote_head"; then
-      die "$BRANCH is behind origin/$BRANCH; pull first"
+  # An unreachable origin is not fatal here: the repository may not exist yet,
+  # or we may be offline. Skip the ahead/behind check and let the push at the
+  # end be the thing that fails, with a clearer error.
+  if git fetch --quiet origin --tags 2>/dev/null; then
+    have_remote=true
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")"
+    if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
+      if git merge-base --is-ancestor "$local_head" "$remote_head"; then
+        die "$BRANCH is behind origin/$BRANCH; pull first"
+      fi
+      dim "note: local $BRANCH is ahead of origin; it will be pushed"
     fi
-    dim "note: local $BRANCH is ahead of origin; it will be pushed"
+  else
+    dim "warning: could not reach origin ($(git remote get-url origin))"
+    dim "         tagging anyway; the push may fail if the repo does not exist yet"
   fi
 else
   dim "no 'origin' remote; the tag will only be created locally"
@@ -148,7 +157,7 @@ fi
 git tag -a "$tag" -m "Release $tag"
 echo "created tag $tag"
 
-if git remote get-url origin >/dev/null 2>&1; then
+if [ "$have_remote" = true ]; then
   git push origin "$BRANCH"
   git push origin "$tag"
   echo
