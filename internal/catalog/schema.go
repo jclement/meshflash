@@ -96,6 +96,15 @@ type Device struct {
 	// in its bootloader at all.
 	USBProduct []string `json:"usb_product,omitempty"`
 
+	// Aliases are ids this device was previously published under.
+	//
+	// The generator folds the two projects' naming onto one id, so a board can
+	// change id between catalog versions — heltec-t114 became
+	// heltec-mesh-node-t114 when the Meshtastic and MeshCore entries merged.
+	// Publishing the old names lets a client migrate a saved selection instead
+	// of reporting a device the operator plainly still owns as unknown.
+	Aliases []string `json:"aliases,omitempty"`
+
 	Notes string `json:"notes,omitempty"`
 }
 
@@ -211,14 +220,34 @@ func (a Artifact) DownloadSize() int64 {
 
 // --- lookup helpers -------------------------------------------------------
 
-// DeviceByID returns the device registry entry.
+// DeviceByID returns the device registry entry, following aliases.
+//
+// An exact match always wins, so a former id being reused by another board
+// cannot shadow the real one.
 func (c *Catalog) DeviceByID(id string) (Device, bool) {
 	for _, d := range c.Devices {
 		if d.ID == id {
 			return d, true
 		}
 	}
+	for _, d := range c.Devices {
+		for _, a := range d.Aliases {
+			if a == id {
+				return d, true
+			}
+		}
+	}
 	return Device{}, false
+}
+
+// ResolveDeviceID maps a possibly-outdated id onto the current one, reporting
+// whether it changed.
+func (c *Catalog) ResolveDeviceID(id string) (string, bool) {
+	d, ok := c.DeviceByID(id)
+	if !ok {
+		return id, false
+	}
+	return d.ID, d.ID != id
 }
 
 // ProjectByID returns a project.

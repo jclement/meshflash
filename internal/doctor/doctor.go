@@ -212,6 +212,8 @@ func checkSelection(cfg config.Config, cat *catalog.Catalog) Check {
 
 	var unknown []string
 	for _, id := range cfg.Devices {
+		// DeviceByID follows aliases, so a merely-renamed board is not
+		// reported as missing.
 		if _, ok := cat.DeviceByID(id); !ok {
 			unknown = append(unknown, id)
 		}

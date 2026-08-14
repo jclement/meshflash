@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/jclement/meshflash/internal/catalog"
@@ -218,4 +219,20 @@ func mergeUSB(dst []catalog.USBID, u catalog.USBID) []catalog.USBID {
 		}
 	}
 	return append(dst, u)
+}
+
+// applyAliases records the ids each device was previously published under, so
+// a client can migrate a saved selection rather than reporting a board the
+// operator still owns as missing from the catalog.
+func applyAliases(devices []catalog.Device) {
+	byCanonical := map[string][]string{}
+	for from, to := range deviceAliases {
+		byCanonical[to] = append(byCanonical[to], from)
+	}
+	for i := range devices {
+		if olds, ok := byCanonical[devices[i].ID]; ok {
+			sort.Strings(olds)
+			devices[i].Aliases = olds
+		}
+	}
 }

@@ -167,6 +167,33 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
+// MigrateDevices rewrites selected device ids that the catalog now publishes
+// under a different name, returning the renames applied.
+//
+// Device ids are not permanently stable: the generator folds the two projects'
+// naming onto one id, so a board can be renamed between catalog versions.
+// Without this a saved selection quietly rots and the operator is told a board
+// they plainly own is not in the catalog.
+func (c *Config) MigrateDevices(resolve func(string) (string, bool)) map[string]string {
+	if len(c.Devices) == 0 || resolve == nil {
+		return nil
+	}
+	renamed := map[string]string{}
+	out := make([]string, 0, len(c.Devices))
+	for _, id := range c.Devices {
+		canonical, changed := resolve(id)
+		if changed {
+			renamed[id] = canonical
+		}
+		out = append(out, canonical)
+	}
+	if len(renamed) == 0 {
+		return nil
+	}
+	c.Devices = dedupeSorted(out)
+	return renamed
+}
+
 // WantsDevice reports whether a device is in the operator's selection.
 func (c Config) WantsDevice(id string) bool {
 	if len(c.Devices) == 0 {

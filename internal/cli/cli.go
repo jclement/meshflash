@@ -114,6 +114,8 @@ func Run(ctx context.Context, args []string) int {
 	switch cmd {
 	case "update":
 		err = app.cmdUpdate(ctx, cmdArgs)
+	case "download":
+		err = app.cmdDownload(ctx, cmdArgs)
 	case "upgrade":
 		err = app.cmdUpgrade(ctx, cmdArgs)
 	case "doctor":
@@ -193,9 +195,27 @@ func (a *App) init() error {
 		a.CatalogErr = err
 	} else {
 		a.Catalog = cat
+		a.migrateSelection()
 	}
 
 	return nil
+}
+
+// migrateSelection follows catalog device renames, so a saved selection keeps
+// working across a catalog that has folded two ids into one.
+func (a *App) migrateSelection() {
+	renamed := a.Cfg.MigrateDevices(a.Catalog.ResolveDeviceID)
+	if len(renamed) == 0 {
+		return
+	}
+	for from, to := range renamed {
+		a.Log.Info("device was renamed in the catalog", "from", from, "to", to)
+		fmt.Fprintf(a.Err, "%s %s\n", tui.Muted().Render(tui.GlyphInfo),
+			tui.Muted().Render(fmt.Sprintf("%s is now called %s; your selection was updated", from, to)))
+	}
+	if err := config.Save(a.Paths, a.Cfg); err != nil {
+		a.Log.Warn("could not save the migrated selection", "error", err)
+	}
 }
 
 // requireCatalog returns the catalog or a message telling the operator how to
@@ -236,6 +256,7 @@ Commands:
   doctor      Show attached devices and diagnose drivers and permissions
   configure   Choose which boards to keep firmware for
   update      Refresh the firmware catalog and cache (needs network)
+  download    Fetch firmware into the cache without touching the catalog
   upgrade     Update meshflash itself (needs network)
   devices     List and manage remembered boards
   version     Print the version
@@ -326,6 +347,24 @@ Flags:
   --add ID,ID      add devices without opening the interactive picker
   --remove ID,ID   remove devices
   --list           print the current selection and exit
+`,
+		"download": `meshflash download — fetch firmware into the cache
+
+Fills the cache for the boards you have selected, without re-fetching the
+catalog. ` + "`update`" + ` does both; this is the firmware half on its own, for a
+metered link or a pinned catalog you do not want disturbed.
+
+You rarely need this. ` + "`configure`" + ` offers to download after you choose
+boards, and ` + "`flash`" + ` fetches whatever is missing on demand when online —
+it only fails on a cache miss if --offline is set.
+
+Usage:
+  meshflash download [flags]
+
+Flags:
+  --device ID   fetch one board instead of the whole selection
+  --all         fetch every board in the catalog (very large)
+  --force       re-download even when already cached
 `,
 		"update": `meshflash update — refresh the firmware catalog and cache
 

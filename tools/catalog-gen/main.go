@@ -79,6 +79,7 @@ func run(ctx context.Context, outPath, cacheDir string, maxReleases int, only st
 
 	cat.Devices = mapValues(devices)
 	applyUSBHints(cat.Devices)
+	applyAliases(cat.Devices)
 
 	sort.Slice(cat.Devices, func(i, j int) bool { return cat.Devices[i].ID < cat.Devices[j].ID })
 
