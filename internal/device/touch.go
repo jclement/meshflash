@@ -118,11 +118,21 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 	// apart from the application's afterwards.
 	portsBefore, _ := ListPorts()
 
-	// Two attempts before asking for help.
+	// The board may already be sitting in its bootloader, in which case
+	// touching would reboot it straight back out into the application.
+	if LooksLikeNRF52Bootloader(*t.Port) {
+		opts.Logger.Info("device is already in its bootloader", "port", t.Port.Name)
+		return Volume{}, &SerialOnlyBootloaderError{Port: *t.Port}
+	}
+
+	// Up to two attempts. Meshtastic's own installer notes that "some hardware
+	// requires this twice", so a touch that does nothing at all is retried.
 	//
-	// Meshtastic's own installer documents this: "Some hardware requires this
-	// twice." The first touch often only knocks the board out of its
-	// application, and the second is what lands it in the bootloader.
+	// Crucially, the check for a serial-only bootloader happens after *each*
+	// attempt, not after the loop. A touch that succeeded leaves the board on
+	// the bootloader's own CDC port, and touching that again does not help: at
+	// best it is a no-op, at worst it reboots the board back out of DFU. The
+	// retry only exists for the case where nothing happened.
 	for attempt := 1; attempt <= touchAttempts; attempt++ {
 		opts.Logger.Info("requesting bootloader entry",
 			"port", t.Port.Name, "baud", TouchBaud, "attempt", attempt)
@@ -143,19 +153,18 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 		if !errors.Is(err, ErrBootloaderTimeout) {
 			return Volume{}, err
 		}
-	}
 
-	// No drive — but the board may well be in its bootloader anyway.
-	//
-	// Adafruit's bootloader exposes CDC only when it was entered by a
-	// magic-baud touch, and CDC plus mass storage only after a double-tap
-	// reset. Finding a bootloader serial port here means the touch worked
-	// perfectly and there simply is no drive to wait for, so the caller should
-	// switch to serial DFU rather than nagging for a button press.
-	if port, err := WaitForBootloaderPort(ctx, portsBefore, 2*time.Second); err == nil {
-		opts.Logger.Info("bootloader is up in serial-only mode; no mass storage will appear",
-			"port", port.Name)
-		return Volume{}, &SerialOnlyBootloaderError{Port: port}
+		// No drive — but the board may well be in its bootloader anyway.
+		//
+		// Adafruit's bootloader exposes CDC only when entered by a magic-baud
+		// touch, and CDC plus mass storage only after a double-tap reset. A
+		// bootloader port here means the touch worked perfectly and there is
+		// no drive to wait for, so stop and let the caller use serial DFU.
+		if port, err := WaitForBootloaderPort(ctx, portsBefore, time.Second); err == nil {
+			opts.Logger.Info("bootloader is up in serial-only mode; no mass storage will appear",
+				"port", port.Name, "attempt", attempt)
+			return Volume{}, &SerialOnlyBootloaderError{Port: port}
+		}
 	}
 
 	// The touch did not take. Some boards need the button.
