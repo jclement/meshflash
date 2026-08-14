@@ -1,6 +1,10 @@
 package device
 
-import "github.com/jclement/meshflash/internal/catalog"
+import (
+	"strings"
+
+	"github.com/jclement/meshflash/internal/catalog"
+)
 
 // bridge describes a USB-serial interface chip.
 type bridge struct {
@@ -86,12 +90,54 @@ func NativeUSB(id catalog.USBID) bool {
 	return ok && !b.shared
 }
 
-// LooksLikeNRF52Bootloader reports whether a port is an Adafruit nRF52
-// bootloader already waiting in serial DFU mode.
+// adafruitVID is the vendor id the nRF52 bootloader ships under, including on
+// boards from other vendors that build it with their own product id.
+const adafruitVID = "239a"
+
+// knownBootloaderPIDs are product ids observed on an nRF52 bootloader.
+//
+// Vendors rebuild Adafruit's bootloader with their own product id, so this
+// list is necessarily incomplete — a Heltec T114 reports 239a:0071, nothing
+// like Adafruit's own 239a:0029. Matching only against a list like this is
+// what made meshflash stare straight at a T114 bootloader and fail to see it,
+// so it is a fast path, not the whole answer: see IsRebootedInto.
+var knownBootloaderPIDs = map[string]string{
+	"0029": "Adafruit nRF52840 bootloader",
+	"002a": "Adafruit nRF52 bootloader",
+	"0071": "Heltec nRF52 bootloader (T114 and relatives)",
+	"0050": "Nordic nRF52 bootloader",
+}
+
+// LooksLikeNRF52Bootloader reports whether a port is an nRF52 bootloader
+// waiting in serial DFU mode.
 func LooksLikeNRF52Bootloader(p Port) bool {
-	switch (catalog.USBID{VID: p.VID, PID: p.PID}).Normalize().String() {
-	case "239a:0029", "239a:002a":
-		return true
+	id := (catalog.USBID{VID: p.VID, PID: p.PID}).Normalize()
+	if id.VID != adafruitVID {
+		return false
 	}
-	return false
+	_, known := knownBootloaderPIDs[id.PID]
+	return known
+}
+
+// IsRebootedInto reports whether `now` is the same physical board as `before`,
+// having re-enumerated as something else.
+//
+// This is the reliable signal, and the one a product-id list cannot give. The
+// USB serial number is burned into the chip and survives the reboot, so a port
+// carrying the same serial with a different product id is unambiguously the
+// same board in a different mode — which, right after a bootloader-entry
+// request, means it is now in its bootloader.
+//
+// On a Heltec T114 the port name does not even change (/dev/cu.usbmodem2101
+// both times); only the product id moves, 239a:8029 to 239a:0071.
+func IsRebootedInto(before, now Port) bool {
+	if before.SerialNumber == "" || now.SerialNumber == "" {
+		return false
+	}
+	if !strings.EqualFold(before.SerialNumber, now.SerialNumber) {
+		return false
+	}
+	beforeID := (catalog.USBID{VID: before.VID, PID: before.PID}).Normalize()
+	nowID := (catalog.USBID{VID: now.VID, PID: now.PID}).Normalize()
+	return beforeID != nowID
 }

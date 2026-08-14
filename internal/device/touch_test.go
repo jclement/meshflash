@@ -67,6 +67,7 @@ func TestLooksLikeNRF52Bootloader(t *testing.T) {
 	}{
 		{"239a", "0029", true},  // Adafruit nRF52840 bootloader
 		{"239a", "002a", true},  // Adafruit nRF52 bootloader
+		{"239a", "0071", true},  // Heltec T114 bootloader, observed on hardware
 		{"239a", "8029", false}, // the same board running its application
 		{"10c4", "ea60", false}, // CP2102 bridge
 		{"", "", false},
@@ -104,5 +105,53 @@ func TestSerialOnlyIsNotATimeout(t *testing.T) {
 	}
 	if serialOnly.Error() == "" {
 		t.Error("error message is empty")
+	}
+}
+
+// Detecting the bootloader by product id alone is not enough.
+//
+// Vendors rebuild Adafruit's bootloader with their own id, so any allowlist is
+// incomplete by construction — a Heltec T114 reports 239a:0071, and meshflash
+// looked straight at one and failed to see it. The chip serial number survives
+// the reboot, so the same serial with a different product id is unambiguously
+// the same board in a different mode.
+//
+// These are the exact values observed on a real T114: the port name does not
+// even change, only the product id.
+func TestIsRebootedInto(t *testing.T) {
+	app := Port{
+		Name: "/dev/cu.usbmodem2101", IsUSB: true,
+		VID: "239A", PID: "8029", SerialNumber: "EB300C0DB2B2863C", Product: "HT-n5262",
+	}
+	boot := Port{
+		Name: "/dev/cu.usbmodem2101", IsUSB: true,
+		VID: "239A", PID: "0071", SerialNumber: "EB300C0DB2B2863C", Product: "HT-n5262",
+	}
+
+	if !IsRebootedInto(app, boot) {
+		t.Error("did not recognise a T114 that rebooted into its bootloader")
+	}
+	// Same mode is not a reboot.
+	if IsRebootedInto(app, app) {
+		t.Error("an unchanged port was reported as rebooted")
+	}
+	// A different board that happens to be in bootloader mode is not ours.
+	other := boot
+	other.SerialNumber = "0123456789ABCDEF"
+	if IsRebootedInto(app, other) {
+		t.Error("a different board was mistaken for ours")
+	}
+	// Without a serial number there is nothing to correlate on, so this must
+	// not guess — a CH340 with no serial would otherwise match anything.
+	noSerial := app
+	noSerial.SerialNumber = ""
+	if IsRebootedInto(noSerial, boot) {
+		t.Error("matched despite having no serial number to correlate on")
+	}
+	// Case differences in the reported hex must not defeat the match.
+	lower := boot
+	lower.SerialNumber = "eb300c0db2b2863c"
+	if !IsRebootedInto(app, lower) {
+		t.Error("serial number comparison is case sensitive")
 	}
 }

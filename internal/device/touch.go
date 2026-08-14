@@ -160,7 +160,7 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 		// touch, and CDC plus mass storage only after a double-tap reset. A
 		// bootloader port here means the touch worked perfectly and there is
 		// no drive to wait for, so stop and let the caller use serial DFU.
-		if port, err := WaitForBootloaderPort(ctx, portsBefore, time.Second); err == nil {
+		if port, err := WaitForBootloaderPort(ctx, portsBefore, *t.Port, time.Second); err == nil {
 			opts.Logger.Info("bootloader is up in serial-only mode; no mass storage will appear",
 				"port", port.Name, "attempt", attempt)
 			return Volume{}, &SerialOnlyBootloaderError{Port: port}
@@ -251,24 +251,33 @@ func waitForNewVolume(ctx context.Context, known map[string]bool, opts EnterBoot
 // bootloader's port is usually a different device node from the application's
 // — which is why this looks for any port carrying a bootloader USB id rather
 // than waiting for the original name to come back.
-func WaitForBootloaderPort(ctx context.Context, before []Port, timeout time.Duration) (Port, error) {
-	known := map[string]bool{}
+func WaitForBootloaderPort(ctx context.Context, before []Port, original Port, timeout time.Duration) (Port, error) {
+	knownName := map[string]bool{}
 	for _, p := range before {
-		known[p.Name] = true
+		knownName[p.Name] = true
 	}
 
 	deadline := time.Now().Add(timeout)
 	for {
 		ports, err := ListPorts()
 		if err == nil {
-			// A newly-appeared bootloader port is the best match.
+			// Strongest signal: the board we touched, same chip serial, now
+			// reporting a different product id. This does not depend on
+			// recognising the vendor's bootloader product id, which is the
+			// only reason a Heltec T114 is detectable at all.
 			for _, p := range ports {
-				if LooksLikeNRF52Bootloader(p) && !known[p.Name] {
+				if IsRebootedInto(original, p) {
 					return p, nil
 				}
 			}
-			// Failing that, one that was already there — the board may have
-			// been sitting in its bootloader before we started.
+			// Then a recognisably-bootloader port that just appeared.
+			for _, p := range ports {
+				if LooksLikeNRF52Bootloader(p) && !knownName[p.Name] {
+					return p, nil
+				}
+			}
+			// Finally one that was already there: the board may have been
+			// sitting in its bootloader before meshflash started.
 			for _, p := range ports {
 				if LooksLikeNRF52Bootloader(p) {
 					return p, nil

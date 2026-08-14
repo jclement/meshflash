@@ -128,7 +128,7 @@ func serialDFUFallback(ctx context.Context, req Request, log *slog.Logger, ports
 			"Bootloader is in serial-only mode (no USB drive) — sending over serial DFU…", 0, 0)
 	} else {
 		req.Progress.emit("bootloader", "No bootloader drive appeared — looking for a serial DFU port…", 0, 0)
-		p, err := device.WaitForBootloaderPort(ctx, portsBefore, 15*time.Second)
+		p, err := device.WaitForBootloaderPort(ctx, portsBefore, *req.Target.Port, 15*time.Second)
 		if err != nil {
 			log.Debug("no bootloader serial port found either", "error", err)
 			return nil, errNoFallback
