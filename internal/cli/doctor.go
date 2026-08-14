@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"time"
 
 	"github.com/jclement/meshflash/internal/catalog"
 	"github.com/jclement/meshflash/internal/device"
 	"github.com/jclement/meshflash/internal/doctor"
 	"github.com/jclement/meshflash/internal/fingerprint"
+	"github.com/jclement/meshflash/internal/probe"
 	"github.com/jclement/meshflash/internal/tui"
 )
 
 func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	drivers := fs.Bool("drivers", false, "list drivers worth pre-installing")
+	askFirmware := fs.Bool("firmware", false, "ask each attached board what firmware it is running")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -40,7 +43,60 @@ func (a *App) cmdDoctor(ctx context.Context, args []string) error {
 	}
 
 	a.printReport(report)
+
+	if *askFirmware {
+		a.printFirmware(ctx, report)
+	} else if len(report.Targets) > 0 {
+		fmt.Fprintln(a.Out, tui.Muted().Render("Run `meshflash doctor --firmware` to ask each board what it is running."))
+	}
 	return nil
+}
+
+// printFirmware asks each attached board what it is running.
+//
+// Not done by default: it opens the port and exchanges a few messages, and
+// while both probes are read-only, `doctor` should stay a passive look at the
+// system unless asked otherwise.
+func (a *App) printFirmware(ctx context.Context, r doctor.Report) {
+	fmt.Fprintln(a.Out)
+	fmt.Fprintln(a.Out, tui.Heading().Render("Installed firmware"))
+
+	asked := 0
+	for _, t := range r.Targets {
+		if t.Port == nil {
+			continue
+		}
+		asked++
+		fmt.Fprintf(a.Out, "  %s\n", tui.Selected().Render(t.Port.Name))
+
+		pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		fw, err := probe.Identify(pctx, probe.Options{Port: t.Port.Name})
+		cancel()
+
+		if err != nil {
+			fmt.Fprintf(a.Out, "    %s\n", tui.Muted().Render(
+				"did not answer — it may be in a bootloader, asleep, or running something else"))
+			a.Log.Debug("firmware probe failed", "port", t.Port.Name, "error", err)
+			continue
+		}
+
+		fmt.Fprintf(a.Out, "    %-12s %s\n", "firmware", tui.OK().Render(fw.Project+" "+fw.Version))
+		if fw.Variant != "" {
+			fmt.Fprintf(a.Out, "    %-12s %s\n", "variant", fw.Variant)
+		}
+		if fw.Board != "" {
+			fmt.Fprintf(a.Out, "    %-12s %s\n", "board", fw.Board)
+		}
+		if fw.NodeName != "" {
+			fmt.Fprintf(a.Out, "    %-12s %s\n", "node name", fw.NodeName)
+		}
+		if fw.Meshtastic != nil && fw.Meshtastic.HWModel != 0 {
+			fmt.Fprintf(a.Out, "    %-12s %d\n", "hw_model", fw.Meshtastic.HWModel)
+		}
+	}
+	if asked == 0 {
+		fmt.Fprintln(a.Out, tui.Muted().Render("  no serial ports to ask"))
+	}
 }
 
 func (a *App) printReport(r doctor.Report) {
