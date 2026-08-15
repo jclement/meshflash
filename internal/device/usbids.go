@@ -110,7 +110,16 @@ var knownBootloaderPIDs = map[string]string{
 
 // LooksLikeNRF52Bootloader reports whether a port is an nRF52 bootloader
 // waiting in serial DFU mode.
+//
+// The product string is checked first and matters more than the ids. Product
+// ids are not usable on their own here: a Seeed T1000-E's bootloader reports
+// 239a:8029, which is the *application* id on a Heltec T114, so any allowlist
+// either misses the one or misreads the other. A "-BOOT" marker in the product
+// string is unambiguous, and vendors set it precisely to say so.
 func LooksLikeNRF52Bootloader(p Port) bool {
+	if _, isBoot := trimBootSuffix(strings.TrimSpace(p.Product)); isBoot {
+		return true
+	}
 	id := (catalog.USBID{VID: p.VID, PID: p.PID}).Normalize()
 	if id.VID != adafruitVID {
 		return false
@@ -131,13 +140,24 @@ func LooksLikeNRF52Bootloader(p Port) bool {
 // On a Heltec T114 the port name does not even change (/dev/cu.usbmodem2101
 // both times); only the product id moves, 239a:8029 to 239a:0071.
 func IsRebootedInto(before, now Port) bool {
-	if before.SerialNumber == "" || now.SerialNumber == "" {
-		return false
-	}
-	if !strings.EqualFold(before.SerialNumber, now.SerialNumber) {
-		return false
-	}
 	beforeID := (catalog.USBID{VID: before.VID, PID: before.PID}).Normalize()
 	nowID := (catalog.USBID{VID: now.VID, PID: now.PID}).Normalize()
-	return beforeID != nowID
+	if beforeID == nowID {
+		return false // nothing changed, so nothing rebooted
+	}
+
+	// A stable chip serial across the change is conclusive. This is how a
+	// Heltec T114 presents: 239a:8029 to 239a:0071, same serial throughout.
+	if before.SerialNumber != "" && now.SerialNumber != "" &&
+		strings.EqualFold(before.SerialNumber, now.SerialNumber) {
+		return true
+	}
+
+	// Not every board keeps it. A Seeed T1000-E reports an entirely different
+	// serial in its bootloader — 2886:0057/33E89E16F14744EB running, versus
+	// 239a:8029/FEA5A1A48C126E65 in DFU — so the serial cannot be required.
+	// The port name survives on both boards, and this is only ever asked
+	// moments after we requested a reboot on that exact port, so a changed id
+	// at an unchanged name is the same device.
+	return before.Name != "" && before.Name == now.Name
 }

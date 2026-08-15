@@ -120,11 +120,13 @@ func serialDFUFallback(ctx context.Context, req Request, log *slog.Logger, ports
 	}
 
 	// Converting a UF2 and synthesising its init packet is unproven on
-	// hardware, so it stays opt-in. Falling back to the double-tap prompt is
-	// slower but uses a path that is known to work.
+	// hardware, so it stays opt-in.
 	if !req.ExperimentalSerialDFU {
 		log.Warn("bootloader is serial-only; UF2-over-DFU is experimental and disabled",
 			"hint", "pass --experimental-serial-dfu to try it")
+		req.Progress.emit("bootloader",
+			"Bootloader has no USB drive. Writing over serial DFU is experimental — "+
+				"re-run with --experimental-serial-dfu, or double-tap reset for a drive.", 0, 0)
 		return nil, errNoFallback
 	}
 
@@ -246,10 +248,13 @@ func bootloaderTimeoutError(rejections []device.Rejection) error {
 		return errors.New(b.String())
 	}
 	return errors.New(
-		"the board never presented a UF2 bootloader volume.\n" +
-			"Double-tap the reset button quickly — the bootloader should appear as a USB drive — then try again.\n" +
-			"If it does appear in your file manager, run `meshflash doctor`: on macOS a terminal needs\n" +
-			"Privacy & Security → Files and Folders → Removable Volumes before it can read one.")
+		"the board never presented a UF2 bootloader.\n\n" +
+			"Not every board honours the 1200-baud reboot request — a Seeed T1000-E ignores it\n" +
+			"entirely — so this one probably needs the button:\n\n" +
+			"  Double-tap the reset button quickly, then run the flash again.\n\n" +
+			"If a drive does appear in your file manager but meshflash still cannot see it, run\n" +
+			"`meshflash doctor`: on macOS a terminal needs Privacy & Security → Files and Folders\n" +
+			"→ Removable Volumes before it can read one.")
 }
 
 // copyToBootloader writes the image, tolerating the disconnect that follows

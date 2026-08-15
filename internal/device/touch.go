@@ -167,13 +167,46 @@ func EnterUF2Bootloader(ctx context.Context, t Target, opts EnterBootloaderOptio
 		}
 	}
 
-	// The touch did not take. Some boards need the button.
+	// The reboot request did not take. Some boards ignore it entirely — a
+	// Seeed T1000-E shows no change at all — and need the button.
 	if opts.OnManualPrompt != nil {
 		opts.OnManualPrompt()
 	}
 	opts.Logger.Warn("automatic bootloader entry did not take; waiting for a manual double-tap reset")
 
-	return waitForNewVolume(ctx, known, opts, 0)
+	// Watch for both outcomes, not just a mounted drive. A manual reset can
+	// land in a bootloader that exposes only CDC, and waiting solely on a
+	// volume meant a correct double-tap went unnoticed until the timeout.
+	return waitForBootloader(ctx, known, portsBefore, *t.Port, opts)
+}
+
+// waitForBootloader waits for either a bootloader volume or a bootloader
+// serial port, whichever the board presents.
+func waitForBootloader(ctx context.Context, known map[string]bool, portsBefore []Port, original Port, opts EnterBootloaderOptions) (Volume, error) {
+	ticker := time.NewTicker(opts.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		if vol, err := waitForNewVolume(ctx, known, opts, opts.PollInterval); err == nil {
+			return vol, nil
+		} else if !errors.Is(err, ErrBootloaderTimeout) {
+			return Volume{}, err
+		}
+
+		if port, err := WaitForBootloaderPort(ctx, portsBefore, original, opts.PollInterval); err == nil {
+			opts.Logger.Info("bootloader appeared in serial-only mode", "port", port.Name)
+			return Volume{}, &SerialOnlyBootloaderError{Port: port}
+		}
+
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return Volume{}, ErrBootloaderTimeout
+			}
+			return Volume{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // SerialOnlyBootloaderError reports that the device is in its bootloader but

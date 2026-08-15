@@ -68,7 +68,7 @@ func TestLooksLikeNRF52Bootloader(t *testing.T) {
 		{"239a", "0029", true},  // Adafruit nRF52840 bootloader
 		{"239a", "002a", true},  // Adafruit nRF52 bootloader
 		{"239a", "0071", true},  // Heltec T114 bootloader, observed on hardware
-		{"239a", "8029", false}, // the same board running its application
+		{"239a", "8029", false}, // T114 running its application (no BOOT marker)
 		{"10c4", "ea60", false}, // CP2102 bridge
 		{"", "", false},
 	}
@@ -111,47 +111,73 @@ func TestSerialOnlyIsNotATimeout(t *testing.T) {
 // Detecting the bootloader by product id alone is not enough.
 //
 // Vendors rebuild Adafruit's bootloader with their own id, so any allowlist is
-// incomplete by construction — a Heltec T114 reports 239a:0071, and meshflash
-// looked straight at one and failed to see it. The chip serial number survives
-// the reboot, so the same serial with a different product id is unambiguously
-// the same board in a different mode.
+// incomplete by construction — a Heltec T114 reports 239a:0071, and a Seeed
+// T1000-E's bootloader reports 239a:8029, which is the *application* id on the
+// T114. No list can satisfy both.
 //
-// These are the exact values observed on a real T114: the port name does not
-// even change, only the product id.
+// Two boards, two different behaviours, both observed on hardware:
+//
+//	T114     app 239a:8029 serial EB300C0DB2B2863C  ->  boot 239a:0071 same serial
+//	T1000-E  app 2886:0057 serial 33E89E16F14744EB  ->  boot 239a:8029 serial FEA5A1A48C126E65
+//
+// The T114 keeps its chip serial across the reboot; the T1000-E changes it
+// completely. What both keep is the port name, and this is only ever asked
+// moments after a reboot was requested on that exact port.
 func TestIsRebootedInto(t *testing.T) {
-	app := Port{
+	t114App := Port{
 		Name: "/dev/cu.usbmodem2101", IsUSB: true,
 		VID: "239A", PID: "8029", SerialNumber: "EB300C0DB2B2863C", Product: "HT-n5262",
 	}
-	boot := Port{
+	t114Boot := Port{
 		Name: "/dev/cu.usbmodem2101", IsUSB: true,
 		VID: "239A", PID: "0071", SerialNumber: "EB300C0DB2B2863C", Product: "HT-n5262",
 	}
-
-	if !IsRebootedInto(app, boot) {
-		t.Error("did not recognise a T114 that rebooted into its bootloader")
+	if !IsRebootedInto(t114App, t114Boot) {
+		t.Error("missed a T114 rebooting into its bootloader (stable serial)")
 	}
-	// Same mode is not a reboot.
-	if IsRebootedInto(app, app) {
+
+	t1000App := Port{
+		Name: "/dev/cu.usbmodem112401", IsUSB: true,
+		VID: "2886", PID: "0057", SerialNumber: "33E89E16F14744EB", Product: "T1000-E",
+	}
+	t1000Boot := Port{
+		Name: "/dev/cu.usbmodem112401", IsUSB: true,
+		VID: "239A", PID: "8029", SerialNumber: "FEA5A1A48C126E65", Product: "T1000-E-BOOT",
+	}
+	if !IsRebootedInto(t1000App, t1000Boot) {
+		t.Error("missed a T1000-E rebooting into its bootloader (serial changes too)")
+	}
+
+	// Nothing changed, so nothing rebooted.
+	if IsRebootedInto(t114App, t114App) {
 		t.Error("an unchanged port was reported as rebooted")
 	}
-	// A different board that happens to be in bootloader mode is not ours.
-	other := boot
-	other.SerialNumber = "0123456789ABCDEF"
-	if IsRebootedInto(app, other) {
-		t.Error("a different board was mistaken for ours")
+
+	// A board on a different port is a different board. The port name is the
+	// discriminator, since two devices cannot hold one name at once.
+	elsewhere := t1000Boot
+	elsewhere.Name = "/dev/cu.usbmodem99999"
+	if IsRebootedInto(t114App, elsewhere) {
+		t.Error("a board on another port was mistaken for ours")
 	}
-	// Without a serial number there is nothing to correlate on, so this must
-	// not guess — a CH340 with no serial would otherwise match anything.
-	noSerial := app
-	noSerial.SerialNumber = ""
-	if IsRebootedInto(noSerial, boot) {
-		t.Error("matched despite having no serial number to correlate on")
+
+	// A stable serial still confirms a match even across a port rename.
+	renamed := t114Boot
+	renamed.Name = "/dev/cu.usbmodem2102"
+	if !IsRebootedInto(t114App, renamed) {
+		t.Error("a stable chip serial should identify the board even if the port name moves")
 	}
-	// Case differences in the reported hex must not defeat the match.
-	lower := boot
-	lower.SerialNumber = "eb300c0db2b2863c"
-	if !IsRebootedInto(app, lower) {
-		t.Error("serial number comparison is case sensitive")
+}
+
+// A "-BOOT" product marker is the one bootloader signal that works on both
+// boards, since the T1000-E's bootloader product id collides with the T114's
+// application id.
+func TestBootloaderProductMarker(t *testing.T) {
+	if !LooksLikeNRF52Bootloader(Port{VID: "239a", PID: "8029", Product: "T1000-E-BOOT"}) {
+		t.Error("did not recognise a bootloader from its product string")
+	}
+	// The same ids without the marker are a running T114, not a bootloader.
+	if LooksLikeNRF52Bootloader(Port{VID: "239a", PID: "8029", Product: "HT-n5262"}) {
+		t.Error("mistook a running board for a bootloader")
 	}
 }
