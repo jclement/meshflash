@@ -212,14 +212,14 @@ func matchVolume(v Volume, cat *catalog.Catalog) []Candidate {
 
 	for _, d := range cat.Devices {
 		switch {
-		case boardID != "" && containsFold(d.UF2Board, boardID):
+		case boardID != "" && matchesProduct(d.UF2Board, boardID):
 			out = append(out, Candidate{
 				DeviceID:   d.ID,
 				Name:       d.Name,
 				Confidence: ConfidenceExact,
 				Reason:     "INFO_UF2.TXT Board-ID " + boardID,
 			})
-		case label != "" && containsFold(d.UF2Volume, label):
+		case label != "" && matchesProduct(d.UF2Volume, label):
 			out = append(out, Candidate{
 				DeviceID:   d.ID,
 				Name:       d.Name,
@@ -231,6 +231,33 @@ func matchVolume(v Volume, cat *catalog.Catalog) []Candidate {
 
 	sortCandidates(out)
 	return out
+}
+
+// matchesProduct compares a reported USB product string against known names.
+//
+// Bootloaders commonly append a marker to the application's product string —
+// a Seeed T1000-E reports "T1000-E" running and "T1000-E-BOOT" in its
+// bootloader — so the same board would otherwise be identified in one state
+// and not the other. Both forms are compared, which also means a hint only has
+// to list the base name.
+func matchesProduct(known []string, product string) bool {
+	if containsFold(known, product) {
+		return true
+	}
+	if base, trimmed := trimBootSuffix(product); trimmed {
+		return containsFold(known, base)
+	}
+	return false
+}
+
+// trimBootSuffix removes a bootloader marker from a product string.
+func trimBootSuffix(s string) (string, bool) {
+	for _, suffix := range []string{"-BOOT", "_BOOT", " BOOT", "BOOT", "-BOOTLOADER", " BOOTLOADER"} {
+		if len(s) > len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix) {
+			return strings.TrimRight(s[:len(s)-len(suffix)], "-_ "), true
+		}
+	}
+	return s, false
 }
 
 // containsFold reports whether want matches any entry, ignoring case and
@@ -267,7 +294,7 @@ func matchPort(p Port, cat *catalog.Catalog) []Candidate {
 	if product := strings.TrimSpace(p.Product); product != "" {
 		var byProduct []Candidate
 		for _, d := range cat.Devices {
-			if containsFold(d.USBProduct, product) || containsFold(d.UF2Board, product) {
+			if matchesProduct(d.USBProduct, product) || matchesProduct(d.UF2Board, product) {
 				byProduct = append(byProduct, Candidate{
 					DeviceID:   d.ID,
 					Name:       d.Name,
