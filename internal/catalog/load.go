@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -28,10 +29,29 @@ func Load(path string) (*Catalog, error) {
 
 // Parse decodes and validates catalog bytes.
 func Parse(data []byte) (*Catalog, error) {
+	// Read the schema version on its own first, so a catalog from a newer
+	// generator gets the upgrade message rather than a decode error about
+	// whichever new field happens to come first.
+	var head struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("parse catalog: %w", err)
+	}
+	if head.SchemaVersion != SchemaVersion {
+		return nil, fmt.Errorf("catalog schema version %d is not supported (this build understands %d); run `meshflash upgrade`",
+			head.SchemaVersion, SchemaVersion)
+	}
+
 	var c Catalog
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields() // a catalog we half-understand is worse than a clear error
 	if err := dec.Decode(&c); err != nil {
+		if isUnknownField(err) {
+			// Same schema version but a field this build has never seen: the
+			// generator is ahead of this binary. Say what to do about it.
+			return nil, fmt.Errorf("parse catalog: %w: the catalog is newer than this build of meshflash; run `meshflash upgrade`", err)
+		}
 		return nil, fmt.Errorf("parse catalog: %w", err)
 	}
 	if err := c.Validate(); err != nil {
@@ -39,6 +59,13 @@ func Parse(data []byte) (*Catalog, error) {
 	}
 	c.normalize()
 	return &c, nil
+}
+
+// isUnknownField reports whether a decode error came from
+// DisallowUnknownFields. encoding/json returns it as a plain error, so the
+// message prefix is the only thing to match on.
+func isUnknownField(err error) bool {
+	return strings.HasPrefix(err.Error(), "json: unknown field ")
 }
 
 func (c *Catalog) normalize() {
